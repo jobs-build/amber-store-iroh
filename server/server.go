@@ -5,6 +5,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -30,14 +31,106 @@ type Server struct {
 	refs    *refstore.Store
 	jobs    int // completeness-walk parallelism; 0 = GOMAXPROCS
 
+	// attachWait bounds how long a sharded transfer waits for the
+	// client's promised data connections before proceeding with
+	// whatever attached.
+	attachWait time.Duration
+	transfers  transfers
+
 	mu       sync.Mutex
 	refLocks map[string]*sync.Mutex
+}
+
+// maxDataConns caps the extra data connections one transfer may request.
+const maxDataConns = 16
+
+// transfers routes attaching data streams to their in-progress transfer
+// by token.
+type transfers struct {
+	mu      sync.Mutex
+	pending map[string]chan io.ReadWriteCloser
+}
+
+// create registers a new transfer and returns its token.
+func (t *transfers) create() ([]byte, error) {
+	token := make([]byte, 16)
+	if _, err := rand.Read(token); err != nil {
+		return nil, err
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.pending == nil {
+		t.pending = make(map[string]chan io.ReadWriteCloser)
+	}
+	t.pending[string(token)] = make(chan io.ReadWriteCloser, maxDataConns)
+	return token, nil
+}
+
+// attach hands rw to the transfer identified by token; ownership moves
+// to the transfer on true.
+func (t *transfers) attach(token []byte, rw io.ReadWriteCloser) bool {
+	t.mu.Lock()
+	ch, ok := t.pending[string(token)]
+	t.mu.Unlock()
+	if !ok {
+		return false
+	}
+	select {
+	case ch <- rw:
+		return true
+	default:
+		return false
+	}
+}
+
+// gather collects up to n attached streams, waiting at most wait for
+// stragglers — a client that fails to open some connections must not
+// stall the transfer.
+func (t *transfers) gather(token []byte, n int, wait time.Duration) []io.ReadWriteCloser {
+	t.mu.Lock()
+	ch := t.pending[string(token)]
+	t.mu.Unlock()
+	if ch == nil {
+		return nil
+	}
+	var out []io.ReadWriteCloser
+	deadline := time.NewTimer(wait)
+	defer deadline.Stop()
+	for len(out) < n {
+		select {
+		case rw := <-ch:
+			out = append(out, rw)
+		case <-deadline.C:
+			return out
+		}
+	}
+	return out
+}
+
+// drop unregisters the token; streams attached but never gathered are
+// closed.
+func (t *transfers) drop(token []byte) {
+	t.mu.Lock()
+	ch, ok := t.pending[string(token)]
+	delete(t.pending, string(token))
+	t.mu.Unlock()
+	if !ok {
+		return
+	}
+	for {
+		select {
+		case rw := <-ch:
+			rw.Close()
+		default:
+			return
+		}
+	}
 }
 
 // New wires a Server over an open packstore and refstore. The caller keeps
 // ownership of both and closes them after the server stops.
 func New(log *slog.Logger, objects *packstore.Store, refs *refstore.Store) *Server {
-	return &Server{log: log, objects: objects, refs: refs, refLocks: map[string]*sync.Mutex{}}
+	return &Server{log: log, objects: objects, refs: refs, attachWait: 5 * time.Second, refLocks: map[string]*sync.Mutex{}}
 }
 
 // lockRef serializes ref commits per name so compare-and-swap is
@@ -60,12 +153,25 @@ func (s *Server) lockRef(name string) (unlock func()) {
 // stays up for further streams. remote identifies the connection's peer
 // for per-operation logging.
 func (s *Server) HandleStream(remote string, rw io.ReadWriteCloser) {
-	defer rw.Close()
 	m, err := protocol.ReadMsg(rw)
 	if err != nil {
+		rw.Close()
 		s.log.Error("read request", "error", err)
 		return
 	}
+	// A data stream attaching to an in-progress transfer changes hands:
+	// the transfer owns and closes it. Everything else is request/response
+	// on this stream.
+	if m.Type == protocol.TAttach {
+		if s.transfers.attach(m.Token, rw) {
+			return
+		}
+		_ = protocol.WriteMsg(rw, protocol.Msg{Type: protocol.TErr, Code: protocol.CodeBadRequest, Text: "unknown transfer token"})
+		rw.Close()
+		s.log.Warn("attach with unknown token", "remote", remote)
+		return
+	}
+	defer rw.Close()
 	switch m.Type {
 	case protocol.TRefList:
 		err = s.handleRefList(rw)
@@ -130,7 +236,12 @@ func (s *Server) handlePush(remote string, rw io.ReadWriter, m protocol.Msg) err
 			return err
 		}
 	}
-	stats, err := wantsync.Receive([]io.ReadWriter{rw}, s.objects, root, s.jobs, nil)
+	channels, release, err := s.shardChannels(rw, m.DataConns)
+	if err != nil {
+		return s.fail(rw, protocol.CodeInternal, err)
+	}
+	defer release()
+	stats, err := wantsync.Receive(channels, s.objects, root, s.jobs, nil)
 	if err != nil {
 		return s.failLocal(rw, err)
 	}
@@ -182,6 +293,40 @@ func (s *Server) logPush(remote, name string, root key.Key, stats wantsync.Stats
 	)
 }
 
+// shardChannels sets up the data channels for a sharded transfer: it
+// offers the client a token, waits briefly for the promised attaches,
+// and returns the control stream plus whatever arrived. With
+// dataConns == 0 it is a no-op single-channel setup.
+func (s *Server) shardChannels(rw io.ReadWriter, dataConns int) ([]io.ReadWriter, func(), error) {
+	if dataConns <= 0 {
+		return []io.ReadWriter{rw}, func() {}, nil
+	}
+	if dataConns > maxDataConns {
+		dataConns = maxDataConns
+	}
+	token, err := s.transfers.create()
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := protocol.WriteMsg(rw, protocol.Msg{Type: protocol.TAccept, Token: token}); err != nil {
+		s.transfers.drop(token)
+		return nil, nil, err
+	}
+	extras := s.transfers.gather(token, dataConns, s.attachWait)
+	channels := make([]io.ReadWriter, 0, 1+len(extras))
+	channels = append(channels, rw)
+	for _, e := range extras {
+		channels = append(channels, e)
+	}
+	release := func() {
+		s.transfers.drop(token)
+		for _, e := range extras {
+			e.Close()
+		}
+	}
+	return channels, release, nil
+}
+
 // checkCAS verifies the push precondition: ExpectedOld must equal the
 // ref's current key (nil meaning "ref must not exist"). On mismatch it
 // sends the cas-mismatch frame carrying the current key and returns an
@@ -221,10 +366,48 @@ func (s *Server) handlePull(rw io.ReadWriter, m protocol.Msg) error {
 	if err != nil {
 		return s.fail(rw, protocol.CodeInternal, err)
 	}
-	if err := protocol.WriteMsg(rw, protocol.Msg{Type: protocol.TRef, Record: raw}); err != nil {
+	ref := protocol.Msg{Type: protocol.TRef, Record: raw}
+	var token []byte
+	if m.DataConns > 0 {
+		token, err = s.transfers.create()
+		if err != nil {
+			return s.fail(rw, protocol.CodeInternal, err)
+		}
+		ref.Token = token
+	}
+	if err := protocol.WriteMsg(rw, ref); err != nil {
+		if token != nil {
+			s.transfers.drop(token)
+		}
 		return err
 	}
-	if err := wantsync.Send(rw, s.objects, nil); err != nil {
+	channels := []io.ReadWriter{rw}
+	if token != nil {
+		n := min(m.DataConns, maxDataConns)
+		extras := s.transfers.gather(token, n, s.attachWait)
+		defer func() {
+			s.transfers.drop(token)
+			for _, e := range extras {
+				e.Close()
+			}
+		}()
+		for _, e := range extras {
+			channels = append(channels, e)
+		}
+	}
+	// One Send loop per channel; the client deals its wants across them
+	// and ends every loop with an empty TWants.
+	errs := make([]error, len(channels))
+	var wg sync.WaitGroup
+	for i, ch := range channels {
+		wg.Add(1)
+		go func(i int, ch io.ReadWriter) {
+			defer wg.Done()
+			errs[i] = wantsync.Send(ch, s.objects, nil)
+		}(i, ch)
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
 		return s.failLocal(rw, err)
 	}
 	return nil

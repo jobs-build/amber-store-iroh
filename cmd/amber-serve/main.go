@@ -165,13 +165,16 @@ func main() {
 
 			// Advertise the direct addresses on the local link too, so
 			// same-LAN clients resolve them over mDNS even when pkarr
-			// is stale or unreachable.
+			// is stale or unreachable. Start is the listen loop itself,
+			// not a launcher — it blocks until ctx ends, so it gets its
+			// own goroutine; Publish is safe before Start.
 			disc := mdns.New(ep.ID())
-			if err := disc.Start(ctx); err != nil {
-				log.Warn("mdns disabled", "error", err)
-			} else {
-				disc.Publish(dns.NewEndpointData(directTransport...))
-			}
+			disc.Publish(dns.NewEndpointData(directTransport...))
+			go func() {
+				if err := disc.Start(ctx); err != nil && ctx.Err() == nil {
+					log.Warn("mdns listener stopped", "error", err)
+				}
+			}()
 
 			// Publish the relay and direct addresses so clients can
 			// resolve the endpoint ID over the internet; re-published

@@ -121,9 +121,10 @@ func dialServer(ctx context.Context, serverID string, directAddrs []string, rela
 	// only), and a short lookup timeout so off-LAN dials fall through
 	// to pkarr/DNS quickly.
 	disc := mdns.New(irohkey.EndpointID(sk.Public()), mdns.WithPassive(true), mdns.WithLookupTimeout(time.Second))
-	if err := disc.Start(ctx); err == nil {
-		services.AddResolver(disc)
-	}
+	// Start is the listen loop itself — it blocks until ctx ends, so it
+	// runs on its own goroutine for the lifetime of the command.
+	go func() { _ = disc.Start(ctx) }()
+	services.AddResolver(disc)
 	services.AddResolver(pkarrResolver)
 	services.AddResolver(iroh.N0DNSAddressLookup(nil))
 

@@ -37,7 +37,9 @@ func newApp() *cli.App {
 			exportCommand(),
 			restoreCommand(),
 			refCommand(),
-			// Task 8 appends: pushCommand(), pullCommand(), refsCommand()
+			pushCommand(),
+			pullCommand(),
+			refsCommand(),
 		},
 	}
 }

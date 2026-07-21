@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -13,11 +15,13 @@ import (
 	"time"
 
 	"github.com/fables-for-robots/amber-store-core/fstree"
+	"github.com/fables-for-robots/amber-store-core/ingest"
 	"github.com/fables-for-robots/amber-store-core/key"
 	"github.com/fables-for-robots/amber-store-core/packstore"
 	"github.com/fables-for-robots/amber-store-core/refstore"
 	"github.com/fables-for-robots/amber-store-iroh/protocol"
 	"github.com/fables-for-robots/amber-store-iroh/server"
+	"github.com/fables-for-robots/amber-store-iroh/wantsync"
 	"github.com/tmc/go-iroh/iroh"
 	irohkey "github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
@@ -433,14 +437,86 @@ func TestE2EDialRacesDeadCandidates(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	start := time.Now()
-	conn, closeConn, err := dialServer(ctx, id, cands, "")
+	sc, err := dialServer(ctx, id, cands, "")
 	if err != nil {
 		t.Fatalf("dial with dead candidate: %v", err)
 	}
-	defer closeConn()
+	defer sc.Close()
 	elapsed := time.Since(start)
 	if elapsed > 4*time.Second {
 		t.Fatalf("dial took %v; a dead candidate must not delay the race", elapsed)
 	}
-	_ = conn
+}
+
+// TestRunSendersOldServerFallback speaks to a peer that ignores
+// DataConns and opens straight with TWants — the pre-sharding protocol.
+// The consumed frame must be replayed and the transfer completed over
+// the single control channel.
+func TestRunSendersOldServerFallback(t *testing.T) {
+	srcDir := setupSource(t)
+	src, err := packstore.Open(filepath.Join(t.TempDir(), "packstore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	root, _, err := ingest.Dir(src, srcDir, ingest.Opts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dest, err := packstore.Open(filepath.Join(t.TempDir(), "packstore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer dest.Close()
+
+	a, b := net.Pipe()
+	defer a.Close()
+	recvDone := make(chan error, 1)
+	go func() {
+		_, err := wantsync.Receive([]io.ReadWriter{b}, dest, root, 0, nil)
+		recvDone <- err
+		b.Close()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := runSenders(ctx, nil, a, src, nil, 4); err != nil {
+		t.Fatalf("fallback send: %v", err)
+	}
+	if err := <-recvDone; err != nil {
+		t.Fatalf("old-style receiver: %v", err)
+	}
+	if err := fstree.CheckComplete(root, dest.Get, dest.Has, 0); err != nil {
+		t.Fatalf("dest incomplete after fallback transfer: %v", err)
+	}
+}
+
+// TestE2ESingleConn pins --conns 1: the request carries DataConns 0, the
+// server sends no TAccept, and the exchange is byte-identical to the
+// pre-sharding protocol.
+func TestE2ESingleConn(t *testing.T) {
+	id, addrArgs := startServer(t)
+	src := setupSource(t)
+	storeA, storeB := t.TempDir(), t.TempDir()
+
+	out, err := runApp(t, "--store", storeA, "import", "--no-progress", "--ref", "one", src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := strings.TrimSpace(out)
+	args := append([]string{"--store", storeA, "push", "--no-progress", "--conns", "1"}, netArgs(id, addrArgs, "one")...)
+	if _, err := runApp(t, args...); err != nil {
+		t.Fatalf("push --conns 1: %v", err)
+	}
+	args = append([]string{"--store", storeB, "pull", "--no-progress", "--conns", "1"}, netArgs(id, addrArgs, "one")...)
+	if _, err := runApp(t, args...); err != nil {
+		t.Fatalf("pull --conns 1: %v", err)
+	}
+	out, err = runApp(t, "--store", storeB, "ref", "get", "one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(out) != root {
+		t.Fatalf("pulled ref at %s, want %s", strings.TrimSpace(out), root)
+	}
 }

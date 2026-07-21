@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/fables-for-robots/amber-store-iroh/protocol"
@@ -75,25 +77,101 @@ func parseDirectAddrs(ctx context.Context, addrs []string) ([]netip.AddrPort, er
 	return out, nil
 }
 
+// serverConn is an established control connection plus the ability to
+// open extra connections to the same server over the same endpoint and
+// candidate set — sharded transfers race the same candidates again.
+type serverConn struct {
+	conn  *iroh.Conn
+	ep    *iroh.Endpoint
+	id    irohkey.EndpointID
+	cands []netaddr.TransportAddr
+
+	mu       sync.Mutex
+	extraEPs []*iroh.Endpoint
+}
+
+// Extra opens one more connection to the same server on its own
+// endpoint — an endpoint's single UDP socket loop caps throughput, so
+// sharded connections must not share one. When the server advertised
+// dedicated data ports, the connection goes to port ports[i%len] on the
+// address the control connection actually reached (spreading load across
+// the server's sockets); otherwise it races the control candidates.
+// Extra endpoints are torn down by Close.
+func (s *serverConn) Extra(ctx context.Context, i int, ports []uint16) (*iroh.Conn, error) {
+	ep, err := iroh.Bind(ctx)
+	if err != nil {
+		return nil, err
+	}
+	cands := s.cands
+	if len(ports) > 0 {
+		if ip, ok := s.remoteIP(); ok {
+			cands = []netaddr.TransportAddr{netaddr.IPAddr{Addr: netip.AddrPortFrom(ip, ports[i%len(ports)])}}
+		}
+	}
+	conn, err := raceConnect(ctx, ep, s.id, cands)
+	if err != nil {
+		// The dedicated port may be filtered; fall back to the
+		// candidates that reached the control stream.
+		if len(ports) > 0 {
+			conn, err = raceConnect(ctx, ep, s.id, s.cands)
+		}
+		if err != nil {
+			ep.Shutdown(context.Background())
+			return nil, err
+		}
+	}
+	s.mu.Lock()
+	s.extraEPs = append(s.extraEPs, ep)
+	s.mu.Unlock()
+	return conn, nil
+}
+
+// remoteIP is the address the control connection actually reached the
+// server at.
+func (s *serverConn) remoteIP() (netip.Addr, bool) {
+	ua, ok := s.conn.RemoteAddr().(*net.UDPAddr)
+	if !ok {
+		return netip.Addr{}, false
+	}
+	ip, ok := netip.AddrFromSlice(ua.IP)
+	if !ok {
+		return netip.Addr{}, false
+	}
+	return ip.Unmap(), true
+}
+
+// Close tears down the control connection and every endpoint.
+func (s *serverConn) Close() {
+	s.conn.Close()
+	s.ep.Shutdown(context.Background())
+	s.mu.Lock()
+	extras := s.extraEPs
+	s.extraEPs = nil
+	s.mu.Unlock()
+	for _, ep := range extras {
+		ep.Shutdown(context.Background())
+	}
+}
+
 // dialServer connects to the server with an ephemeral client identity
 // (access is open, so no stable key is needed). With direct addresses it
 // dials straight at them — no discovery, no relays — which is also how
 // the offline end-to-end tests connect. Without them it resolves the
 // endpoint ID via pkarr and DNS like the irohese client.
-func dialServer(ctx context.Context, serverID string, directAddrs []string, relayURL string) (*iroh.Conn, func(), error) {
+func dialServer(ctx context.Context, serverID string, directAddrs []string, relayURL string) (*serverConn, error) {
 	id, err := irohkey.ParseEndpointID(serverID)
 	if err != nil {
-		return nil, nil, fmt.Errorf("parse endpoint id: %w", err)
+		return nil, fmt.Errorf("parse endpoint id: %w", err)
 	}
 
 	if len(directAddrs) > 0 {
 		aps, err := parseDirectAddrs(ctx, directAddrs)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		ep, err := iroh.Bind(ctx)
 		if err != nil {
-			return nil, nil, fmt.Errorf("bind: %w", err)
+			return nil, fmt.Errorf("bind: %w", err)
 		}
 		cands := make([]netaddr.TransportAddr, len(aps))
 		for i, ap := range aps {
@@ -102,19 +180,19 @@ func dialServer(ctx context.Context, serverID string, directAddrs []string, rela
 		conn, err := raceConnect(ctx, ep, id, cands)
 		if err != nil {
 			ep.Shutdown(ctx)
-			return nil, nil, fmt.Errorf("connect: %w", err)
+			return nil, fmt.Errorf("connect: %w", err)
 		}
-		return conn, func() { conn.Close(); ep.Shutdown(context.Background()) }, nil
+		return &serverConn{conn: conn, ep: ep, id: id, cands: cands}, nil
 	}
 
 	sk, err := irohkey.GenerateSecretKey()
 	if err != nil {
-		return nil, nil, fmt.Errorf("generate key: %w", err)
+		return nil, fmt.Errorf("generate key: %w", err)
 	}
 
 	pkarrResolver, err := iroh.N0PkarrResolver(nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("pkarr resolver: %w", err)
+		return nil, fmt.Errorf("pkarr resolver: %w", err)
 	}
 	var services iroh.AddressLookupServices
 	// mDNS first: on the server's LAN it yields direct addresses even
@@ -131,7 +209,7 @@ func dialServer(ctx context.Context, serverID string, directAddrs []string, rela
 
 	relayMode, err := relaymode.FromFlag(relayURL)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	ep, err := iroh.Bind(
 		ctx,
@@ -140,7 +218,7 @@ func dialServer(ctx context.Context, serverID string, directAddrs []string, rela
 		iroh.WithRelayMode(relayMode),
 	)
 	if err != nil {
-		return nil, nil, fmt.Errorf("bind: %w", err)
+		return nil, fmt.Errorf("bind: %w", err)
 	}
 
 	// Connect does no discovery on its own: it only dials addresses
@@ -164,17 +242,61 @@ func dialServer(ctx context.Context, serverID string, directAddrs []string, rela
 	if !resolved {
 		ep.Shutdown(ctx)
 		if lastErr != nil {
-			return nil, nil, fmt.Errorf("no address found for endpoint %s (last resolver error: %v)", id, lastErr)
+			return nil, fmt.Errorf("no address found for endpoint %s (last resolver error: %v)", id, lastErr)
 		}
-		return nil, nil, fmt.Errorf("no address found for endpoint %s", id)
+		return nil, fmt.Errorf("no address found for endpoint %s", id)
 	}
 
-	conn, err := raceConnect(ctx, ep, id, addr.Addrs())
+	cands := addr.Addrs()
+	conn, err := raceConnect(ctx, ep, id, cands)
 	if err != nil {
 		ep.Shutdown(ctx)
-		return nil, nil, fmt.Errorf("connect: %w", err)
+		return nil, fmt.Errorf("connect: %w", err)
 	}
-	return conn, func() { conn.Close(); ep.Shutdown(context.Background()) }, nil
+	return &serverConn{conn: conn, ep: ep, id: id, cands: cands}, nil
+}
+
+// attachExtras opens up to n extra connections, attaches each to the
+// transfer token, and returns the attached streams with a closer.
+// Failures reduce parallelism instead of failing the transfer — the
+// server's gather is lenient about missing attaches.
+func attachExtras(ctx context.Context, sc *serverConn, token []byte, ports []uint16, n int) ([]io.ReadWriter, func()) {
+	var streams []io.ReadWriter
+	var closers []func()
+	for i := 0; i < n; i++ {
+		conn, err := sc.Extra(ctx, i, ports)
+		if err != nil {
+			break
+		}
+		stream, err := conn.OpenStreamConn(ctx)
+		if err != nil {
+			conn.Close()
+			break
+		}
+		if err := protocol.WriteMsg(stream, protocol.Msg{Type: protocol.TAttach, Token: token}); err != nil {
+			stream.Close()
+			conn.Close()
+			break
+		}
+		streams = append(streams, stream)
+		closers = append(closers, func() { stream.Close(); conn.Close() })
+	}
+	return streams, func() {
+		for _, c := range closers {
+			c()
+		}
+	}
+}
+
+// connsFlag clamps the --conns value to a sane range.
+func connsFlag(n int) int {
+	if n < 1 {
+		return 1
+	}
+	if n > 16 {
+		return 16
+	}
+	return n
 }
 
 // raceConnect dials every candidate address concurrently and returns the

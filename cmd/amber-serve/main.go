@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -103,6 +104,11 @@ func main() {
 			&cli.StringSliceFlag{
 				Name:  "advertise-addr",
 				Usage: "direct address to advertise, ip or ip:port (repeatable; replaces interface auto-detection)",
+			},
+			&cli.IntFlag{
+				Name:  "data-endpoints",
+				Value: 3,
+				Usage: "extra UDP endpoints for sharded transfers (0 disables; one socket caps well below fast links)",
 			},
 		},
 		Action: func(c *cli.Context) error {
@@ -205,7 +211,40 @@ func main() {
 			log.Info("server listening", "addr", advertised)
 
 			srv := server.New(log, objects, refs)
+
+			// Extra data endpoints give sharded transfers separate UDP
+			// sockets — one socket's loop caps well below a fast link.
+			// Direct-path only (no relay, not published): clients learn
+			// the ports in-band and fall back to the control candidates.
+			nData := c.Int("data-endpoints")
+			if nData < 0 {
+				nData = 0
+			}
+			if nData > 15 {
+				nData = 15
+			}
+			var dataPorts []uint16
+			var dataWG sync.WaitGroup
+			for i := 0; i < nData; i++ {
+				dep, err := iroh.Bind(ctx, iroh.WithSecretKey(sk), iroh.WithALPNs(protocol.ALPN))
+				if err != nil {
+					return fmt.Errorf("bind data endpoint: %w", err)
+				}
+				defer dep.Shutdown(context.Background())
+				dataPorts = append(dataPorts, dep.LocalAddr().Port())
+				dataWG.Add(1)
+				go func(dep *iroh.Endpoint) {
+					defer dataWG.Done()
+					_ = srv.Serve(ctx, dep, shutdownGrace)
+				}(dep)
+			}
+			srv.SetDataPorts(dataPorts)
+			if len(dataPorts) > 0 {
+				log.Info("data endpoints", "ports", dataPorts)
+			}
+
 			err = srv.Serve(ctx, ep, shutdownGrace)
+			dataWG.Wait()
 			log.Info("server stopped")
 			return err
 		},

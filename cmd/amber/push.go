@@ -1,16 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/fables-for-robots/amber-store-core/key"
+	"github.com/fables-for-robots/amber-store-core/packstore"
 	"github.com/fables-for-robots/amber-store-core/reference"
 	"github.com/fables-for-robots/amber-store-core/refstore"
 	"github.com/fables-for-robots/amber-store-iroh/protocol"
@@ -25,6 +28,7 @@ func pushCommand() *cli.Command {
 		relayURL   string
 		force      bool
 		noProgress bool
+		conns      int
 	)
 	flags := append(serverFlags(&server, &addrs, &relayURL),
 		&cli.BoolFlag{
@@ -37,6 +41,12 @@ func pushCommand() *cli.Command {
 			Usage:       "disable the progress bar",
 			Destination: &noProgress,
 		},
+		&cli.IntFlag{
+			Name:        "conns",
+			Value:       4,
+			Usage:       "parallel connections for the transfer (1-16; servers without support fall back to 1)",
+			Destination: &conns,
+		},
 	)
 	return &cli.Command{
 		Name:      "push",
@@ -47,12 +57,12 @@ func pushCommand() *cli.Command {
 			if c.NArg() != 1 {
 				return fmt.Errorf("push requires exactly one NAME argument, got %d", c.NArg())
 			}
-			return runPush(c, server, addrs.Value(), relayURL, force, noProgress, c.Args().First())
+			return runPush(c, server, addrs.Value(), relayURL, force, noProgress, connsFlag(conns), c.Args().First())
 		},
 	}
 }
 
-func runPush(c *cli.Context, server string, addrs []string, relayURL string, force bool, noProgress bool, name string) error {
+func runPush(c *cli.Context, server string, addrs []string, relayURL string, force bool, noProgress bool, conns int, name string) error {
 	if strings.HasPrefix(name, trackingPrefix) {
 		return fmt.Errorf("ref %q: the %q namespace is reserved for remote-tracking refs", name, trackingPrefix)
 	}
@@ -82,12 +92,12 @@ func runPush(c *cli.Context, server string, addrs []string, relayURL string, for
 		return err
 	}
 
-	conn, closeConn, err := dialServer(c.Context, server, addrs, relayURL)
+	sc, err := dialServer(c.Context, server, addrs, relayURL)
 	if err != nil {
 		return err
 	}
-	defer closeConn()
-	stream, err := conn.OpenStreamConn(c.Context)
+	defer sc.Close()
+	stream, err := sc.conn.OpenStreamConn(c.Context)
 	if err != nil {
 		return fmt.Errorf("open stream: %w", err)
 	}
@@ -110,11 +120,11 @@ func runPush(c *cli.Context, server string, addrs []string, relayURL string, for
 
 	// A QUIC stream is invisible to the server until data flows, so the
 	// request goes out before any read.
-	req := protocol.Msg{Type: protocol.TPush, Name: name, Root: root[:], CAS: !force, ExpectedOld: expectedOld}
+	req := protocol.Msg{Type: protocol.TPush, Name: name, Root: root[:], CAS: !force, ExpectedOld: expectedOld, DataConns: conns - 1}
 	if err := protocol.WriteMsg(stream, req); err != nil {
 		return err
 	}
-	if err := wantsync.Send(stream, objects, xfer); err != nil {
+	if err := runSenders(c.Context, sc, stream, objects, xfer, conns); err != nil {
 		return pushError(name, err)
 	}
 	xfer.Finish()
@@ -152,6 +162,55 @@ func runPush(c *cli.Context, server string, addrs []string, relayURL string, for
 	}
 	fmt.Fprintf(c.App.Writer, "%s -> %s\n", name, root)
 	return nil
+}
+
+// runSenders drives the transfer's sending side. With one connection it
+// is exactly the plain Send loop. With more, the first server frame
+// decides: TAccept means a sharding-aware server — attach the extra
+// connections and run one Send loop per channel; a TWants means an old
+// server that ignored the request's DataConns — replay the consumed
+// frame in front of the stream and fall back to a single channel; a
+// TErr (e.g. cas-mismatch) surfaces as the usual remote error.
+func runSenders(ctx context.Context, sc *serverConn, ctrl io.ReadWriter, objects *packstore.Store, xfer *XferProgress, conns int) error {
+	if conns <= 1 {
+		return wantsync.Send(ctrl, objects, xfer)
+	}
+	first, err := protocol.ReadMsg(ctrl)
+	if err != nil {
+		return err
+	}
+	switch first.Type {
+	case protocol.TErr:
+		return protocol.RemoteFromMsg(first)
+	case protocol.TWants:
+		var replay bytes.Buffer
+		if err := protocol.WriteMsg(&replay, first); err != nil {
+			return err
+		}
+		fallback := struct {
+			io.Reader
+			io.Writer
+		}{io.MultiReader(&replay, ctrl), ctrl}
+		return wantsync.Send(fallback, objects, xfer)
+	case protocol.TAccept:
+	default:
+		return fmt.Errorf("%w: type %d, want TAccept or TWants", protocol.ErrProtocol, first.Type)
+	}
+
+	streams, closeStreams := attachExtras(ctx, sc, first.Token, first.DataPorts, conns-1)
+	defer closeStreams()
+	channels := append([]io.ReadWriter{ctrl}, streams...)
+	errs := make([]error, len(channels))
+	var wg sync.WaitGroup
+	for i, ch := range channels {
+		wg.Add(1)
+		go func(i int, ch io.ReadWriter) {
+			defer wg.Done()
+			errs[i] = wantsync.Send(ch, objects, xfer)
+		}(i, ch)
+	}
+	wg.Wait()
+	return errors.Join(errs...)
 }
 
 // pushError rewrites a cas-mismatch into an actionable message.

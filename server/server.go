@@ -36,6 +36,11 @@ type Server struct {
 	// whatever attached.
 	attachWait time.Duration
 	transfers  transfers
+	// dataPorts are the UDP ports of the extra data endpoints, offered
+	// to sharding clients so their connections land on separate server
+	// sockets (one endpoint's socket loop caps out well below a fast
+	// link).
+	dataPorts []uint16
 
 	mu       sync.Mutex
 	refLocks map[string]*sync.Mutex
@@ -132,6 +137,10 @@ func (t *transfers) drop(token []byte) {
 func New(log *slog.Logger, objects *packstore.Store, refs *refstore.Store) *Server {
 	return &Server{log: log, objects: objects, refs: refs, attachWait: 5 * time.Second, refLocks: map[string]*sync.Mutex{}}
 }
+
+// SetDataPorts records the data-endpoint ports advertised to sharding
+// clients. Call before Serve.
+func (s *Server) SetDataPorts(ports []uint16) { s.dataPorts = ports }
 
 // lockRef serializes ref commits per name so compare-and-swap is
 // race-free under concurrent pushes. Entries are never removed; the map
@@ -308,7 +317,7 @@ func (s *Server) shardChannels(rw io.ReadWriter, dataConns int) ([]io.ReadWriter
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := protocol.WriteMsg(rw, protocol.Msg{Type: protocol.TAccept, Token: token}); err != nil {
+	if err := protocol.WriteMsg(rw, protocol.Msg{Type: protocol.TAccept, Token: token, DataPorts: s.dataPorts}); err != nil {
 		s.transfers.drop(token)
 		return nil, nil, err
 	}
@@ -374,6 +383,7 @@ func (s *Server) handlePull(rw io.ReadWriter, m protocol.Msg) error {
 			return s.fail(rw, protocol.CodeInternal, err)
 		}
 		ref.Token = token
+		ref.DataPorts = s.dataPorts
 	}
 	if err := protocol.WriteMsg(rw, ref); err != nil {
 		if token != nil {

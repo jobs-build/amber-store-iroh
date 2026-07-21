@@ -22,6 +22,7 @@ func pullCommand() *cli.Command {
 		addrs      cli.StringSlice
 		relayURL   string
 		noProgress bool
+		conns      int
 	)
 	return &cli.Command{
 		Name:      "pull",
@@ -33,17 +34,23 @@ func pullCommand() *cli.Command {
 				Usage:       "disable the progress bar",
 				Destination: &noProgress,
 			},
+			&cli.IntFlag{
+				Name:        "conns",
+				Value:       4,
+				Usage:       "parallel connections for the transfer (1-16; servers without support fall back to 1)",
+				Destination: &conns,
+			},
 		),
 		Action: func(c *cli.Context) error {
 			if c.NArg() != 1 {
 				return fmt.Errorf("pull requires exactly one NAME argument, got %d", c.NArg())
 			}
-			return runPull(c, server, addrs.Value(), relayURL, noProgress, c.Args().First())
+			return runPull(c, server, addrs.Value(), relayURL, noProgress, connsFlag(conns), c.Args().First())
 		},
 	}
 }
 
-func runPull(c *cli.Context, server string, addrs []string, relayURL string, noProgress bool, name string) error {
+func runPull(c *cli.Context, server string, addrs []string, relayURL string, noProgress bool, conns int, name string) error {
 	if err := reference.ValidateName(name); err != nil {
 		return err
 	}
@@ -56,17 +63,17 @@ func runPull(c *cli.Context, server string, addrs []string, relayURL string, noP
 	}
 	defer closeStore(objects, refs)
 
-	conn, closeConn, err := dialServer(c.Context, server, addrs, relayURL)
+	sc, err := dialServer(c.Context, server, addrs, relayURL)
 	if err != nil {
 		return err
 	}
-	defer closeConn()
-	stream, err := conn.OpenStreamConn(c.Context)
+	defer sc.Close()
+	stream, err := sc.conn.OpenStreamConn(c.Context)
 	if err != nil {
 		return fmt.Errorf("open stream: %w", err)
 	}
 
-	if err := protocol.WriteMsg(stream, protocol.Msg{Type: protocol.TPull, Name: name}); err != nil {
+	if err := protocol.WriteMsg(stream, protocol.Msg{Type: protocol.TPull, Name: name, DataConns: conns - 1}); err != nil {
 		return err
 	}
 	m, err := protocol.ReadMsg(stream)
@@ -102,7 +109,15 @@ func runPull(c *cli.Context, server string, addrs []string, relayURL string, noP
 		pwg.Go(func() { xfer.Run(pctx, os.Stderr, start, isTTY) })
 	}
 
-	if _, err := wantsync.Receive([]io.ReadWriter{stream}, objects, root, 0, xfer); err != nil {
+	// A sharding-aware server put a transfer token in the ref frame; an
+	// old server omits it and the transfer stays single-channel.
+	channels := []io.ReadWriter{stream}
+	if len(m.Token) > 0 && conns > 1 {
+		streams, closeStreams := attachExtras(c.Context, sc, m.Token, m.DataPorts, conns-1)
+		defer closeStreams()
+		channels = append(channels, streams...)
+	}
+	if _, err := wantsync.Receive(channels, objects, root, 0, xfer); err != nil {
 		return err
 	}
 	xfer.Finish()

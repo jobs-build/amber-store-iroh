@@ -23,7 +23,7 @@ func TestMsgRoundTrip(t *testing.T) {
 		{Type: TOK, Key: bytes.Repeat([]byte{4}, 32)},
 		{Type: TErr, Code: CodeCASMismatch, Text: "remote ref changed", Current: bytes.Repeat([]byte{5}, 32)},
 		{Type: TPush, Name: "n", Root: bytes.Repeat([]byte{7}, 32), DataConns: 3},
-		{Type: TAccept, Token: []byte("tok-1234")},
+		{Type: TAccept, Token: []byte("tok-1234"), DataPorts: []uint16{4242, 4243}},
 		{Type: TAttach, Token: []byte("tok-1234")},
 		{Type: TRef, Record: []byte{0xa1}, Token: []byte("tok-9")},
 	}
@@ -47,6 +47,14 @@ func TestMsgRoundTrip(t *testing.T) {
 
 func checkMsgEqual(t *testing.T, got, want Msg) {
 	t.Helper()
+	if len(got.DataPorts) != len(want.DataPorts) {
+		t.Fatalf("round trip mismatch:\n got %+v\nwant %+v", got, want)
+	}
+	for i := range want.DataPorts {
+		if got.DataPorts[i] != want.DataPorts[i] {
+			t.Fatalf("dataports mismatch: got %v want %v", got.DataPorts, want.DataPorts)
+		}
+	}
 	if got.DataConns != want.DataConns || !bytes.Equal(got.Token, want.Token) {
 		t.Fatalf("round trip mismatch:\n got %+v\nwant %+v", got, want)
 	}

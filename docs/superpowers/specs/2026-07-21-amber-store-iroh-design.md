@@ -165,6 +165,28 @@ want-list. The client then sets the local ref and the remote-tracking ref.
 The local ref update is unconditional — the client store is single-owner,
 so there is no local race.
 
+### Sharded transfers
+
+One endpoint's UDP socket loop caps throughput well below a fast link,
+so a transfer can spread across parallel connections on separate
+sockets. The client requests it with `dataConns` in the push/pull
+request; a sharding-aware server replies with a transfer `token` (in
+`TAccept` for pushes, inside the ref frame for pulls) plus the UDP ports
+of its dedicated data endpoints. The client opens each extra connection
+on its own endpoint — targeting the advertised ports on the address the
+control connection reached, falling back to the control candidates —
+and attaches its stream with `TAttach{token}`; the server routes
+attaching streams to the in-progress transfer and proceeds leniently
+with whatever attached within a bounded wait.
+
+Each round's wants are dealt round-robin across the channels; a channel
+whose shard is empty gets no frame that round (an empty want list would
+terminate its sender), and the final empty want list goes to every
+channel. Compatibility is by omission: an old server ignores `dataConns`
+and opens with wants directly (the client replays the consumed frame and
+stays single-channel); an old client never sets `dataConns` and sees the
+pre-sharding exchange byte-for-byte.
+
 ### Errors
 
 Any failure is reported as an `{error: {code, message, ...}}` frame followed
@@ -186,8 +208,8 @@ amber --store ./st restore ref:NAME ./dest
 amber --store ./st ref list|get|set|rm ...
 
 # client — network commands
-amber --store ./st push --server ID NAME [--force]
-amber --store ./st pull --server ID NAME
+amber --store ./st push --server ID NAME [--force] [--conns N]
+amber --store ./st pull --server ID NAME [--conns N]
 amber refs --server ID                               # list remote refs
 ```
 
@@ -229,4 +251,3 @@ apply to `import`.
 - Refspec mapping between local and remote names.
 - Multi-server remotes configuration; `--server` is passed per invocation.
 - Garbage collection / ref deletion propagation.
-- Parallel multi-stream transfers.

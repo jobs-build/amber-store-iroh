@@ -78,6 +78,7 @@ type Msg struct {
 	Current     []byte    `cbor:"12,keyasint,omitempty"` // cas-mismatch: the server's current key (nil = absent)
 	Token       []byte    `cbor:"13,keyasint,omitempty"` // transfer token for TAttach/TAccept (and TRef on sharded pulls)
 	DataConns   int       `cbor:"14,keyasint,omitempty"` // push/pull request: extra data connections the client will attach
+	DataPorts   []uint16  `cbor:"15,keyasint,omitempty"` // TAccept/TRef: server data-endpoint UDP ports for the extra connections
 }
 
 var (

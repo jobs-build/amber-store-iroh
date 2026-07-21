@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -111,18 +112,34 @@ func main() {
 				return fmt.Errorf("connect to relay: %w", err)
 			}
 
-			// Publish the relay address so clients can resolve the
-			// endpoint ID over the internet; re-published in the
-			// background every 5 minutes.
+			// The default wildcard bind address is not a dialable
+			// candidate and is dropped from published records, which
+			// would leave clients relay-only. Advertise the machine's
+			// real interface addresses on the bound port so peers can
+			// dial direct.
+			ifaceAddrs, err := net.InterfaceAddrs()
+			if err != nil {
+				return fmt.Errorf("interface addresses: %w", err)
+			}
+			direct := directAddrPorts(ifaceAddrs, ep.LocalAddr().Port())
+			advertised := ep.Addr()
+			for _, ap := range direct {
+				ep.AddExternalAddr(ap)
+				advertised = advertised.WithIP(ap)
+			}
+
+			// Publish the relay and direct addresses so clients can
+			// resolve the endpoint ID over the internet; re-published
+			// in the background every 5 minutes.
 			pub, err := iroh.N0PkarrPublisher(sk, nil)
 			if err != nil {
 				return fmt.Errorf("pkarr publisher: %w", err)
 			}
 			defer pub.Close()
-			pub.Publish(dns.NewEndpointData(ep.Addr().Addrs()...))
+			pub.Publish(dns.NewEndpointData(advertised.Addrs()...))
 
 			log.Info("server started", "id", ep.ID())
-			log.Info("server listening", "addr", ep.Addr())
+			log.Info("server listening", "addr", advertised)
 
 			srv := server.New(log, objects, refs)
 			err = srv.Serve(ctx, ep, shutdownGrace)

@@ -179,7 +179,9 @@ func main() {
 			// Publish the relay and direct addresses so clients can
 			// resolve the endpoint ID over the internet; re-published
 			// in the background every 5 minutes.
-			pub, err := iroh.N0PkarrPublisher(sk, nil)
+			pub, err := iroh.N0PkarrPublisher(sk, &iroh.PkarrPublisherConfig{
+				AddrFilter: publishableAddrs,
+			})
 			if err != nil {
 				return fmt.Errorf("pkarr publisher: %w", err)
 			}

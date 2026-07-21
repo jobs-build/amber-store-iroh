@@ -5,6 +5,8 @@ import (
 	"net/netip"
 	"slices"
 	"testing"
+
+	"github.com/tmc/go-iroh/netaddr"
 )
 
 func ipNet(s string) *net.IPNet {
@@ -37,6 +39,22 @@ func TestDirectAddrPorts(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("got %v, want %v", got, want)
+	}
+}
+
+func TestPublishableAddrsDropsWildcard(t *testing.T) {
+	relay := netaddr.RelayAddr{}
+	keep := netaddr.IPAddr{Addr: netip.MustParseAddrPort("192.168.1.9:1")}
+	in := []netaddr.TransportAddr{
+		relay,
+		keep,
+		netaddr.IPAddr{Addr: netip.MustParseAddrPort("[::]:1")},    // wildcard: drop
+		netaddr.IPAddr{Addr: netip.MustParseAddrPort("0.0.0.0:1")}, // wildcard: drop
+		netaddr.IPAddr{}, // invalid: drop
+	}
+	got := publishableAddrs(in)
+	if len(got) != 2 || got[0] != relay || got[1] != keep {
+		t.Fatalf("got %v", got)
 	}
 }
 

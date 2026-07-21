@@ -130,7 +130,7 @@ func (s *Server) handlePush(remote string, rw io.ReadWriter, m protocol.Msg) err
 			return err
 		}
 	}
-	stats, err := wantsync.Receive(rw, s.objects, root, s.jobs, nil)
+	stats, err := wantsync.Receive([]io.ReadWriter{rw}, s.objects, root, s.jobs, nil)
 	if err != nil {
 		return s.failLocal(rw, err)
 	}

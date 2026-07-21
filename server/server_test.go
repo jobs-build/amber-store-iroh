@@ -295,7 +295,7 @@ func TestPullTransfersTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := wantsync.Receive(c, dest, k, 0, nil); err != nil {
+	if _, err := wantsync.Receive([]io.ReadWriter{c}, dest, k, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := fstree.CheckComplete(k, dest.Get, dest.Has, 0); err != nil {

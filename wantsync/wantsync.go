@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/fables-for-robots/amber-store-core/amberpack"
 	"github.com/fables-for-robots/amber-store-core/fstree"
@@ -161,13 +162,28 @@ func (w *wireWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// Receive runs the receiving half of the want loop over rw: rounds of
-// TWants → amberpack until nothing below root is missing. The final,
-// empty TWants tells the sender the loop is over. Received objects are
-// verified against their keys before being stored — the peer is untrusted.
-func Receive(rw io.ReadWriter, st *packstore.Store, root key.Key, jobs int, prog Progress) (Stats, error) {
+// Receive runs the receiving half of the want loop: rounds of TWants →
+// amberpack until nothing below root is missing. channels[0] is the
+// control channel; any further channels are extra data connections and
+// each round's wants are dealt across all of them, with the packs decoded
+// concurrently into one verified write stream. A channel whose shard is
+// empty gets no frame that round (an empty TWants would terminate its
+// sender); the final, empty TWants goes to every channel to end the
+// loop. Received objects are verified against their keys before being
+// stored — the peer is untrusted.
+func Receive(channels []io.ReadWriter, st *packstore.Store, root key.Key, jobs int, prog Progress) (Stats, error) {
 	var stats Stats
-	cr := &countingReader{r: rw, prog: prog}
+	crs := make([]*countingReader, len(channels))
+	for i, ch := range channels {
+		crs[i] = &countingReader{r: ch, prog: prog}
+	}
+	wireTotal := func() int64 {
+		var n int64
+		for _, cr := range crs {
+			n += cr.n
+		}
+		return n
+	}
 	frontier := []key.Key{root}
 	for {
 		wants, err := Wants(st, frontier, jobs)
@@ -175,62 +191,129 @@ func Receive(rw io.ReadWriter, st *packstore.Store, root key.Key, jobs int, prog
 			return stats, err
 		}
 		wants, carry := splitWants(wants, maxWantsPerRound)
-		if err := protocol.WriteMsg(rw, protocol.Msg{Type: protocol.TWants, Keys: encodeKeys(wants)}); err != nil {
-			return stats, err
-		}
 		stats.Rounds++
 		stats.Requested += len(wants)
 		if prog != nil && len(wants) > 0 {
 			prog.Requested(len(wants), keyBytes(wants))
 		}
 		if len(wants) == 0 {
-			stats.Bytes = cr.n
+			for _, ch := range channels {
+				if err := protocol.WriteMsg(ch, protocol.Msg{Type: protocol.TWants}); err != nil {
+					return stats, err
+				}
+			}
+			stats.Bytes = wireTotal()
 			return stats, nil
 		}
+
+		shards := shardWants(wants, len(channels))
+		type active struct {
+			idx     int
+			packSrc io.Reader
+			tracked *errTrackingReader
+		}
+		var actives []*active
+		for i, shard := range shards {
+			if len(shard) == 0 {
+				continue
+			}
+			if err := protocol.WriteMsg(channels[i], protocol.Msg{Type: protocol.TWants, Keys: encodeKeys(shard)}); err != nil {
+				return stats, err
+			}
+			actives = append(actives, &active{idx: i})
+		}
+
+		// Decode every active channel's pack concurrently into one
+		// stream of objects; a single consumer records receipt and
+		// children, and WriteParallel verifies and stores. done stops
+		// the decoders if the consumer aborts early, so nobody blocks
+		// on the merge channel forever.
+		type item struct {
+			obj  packstore.Object
+			kids []key.Key
+		}
+		merged := make(chan item, 64)
+		done := make(chan struct{})
+		closeDone := sync.OnceFunc(func() { close(done) })
+		decodeErrs := make([]error, len(actives))
+		var wg sync.WaitGroup
+		for ai, a := range actives {
+			packSrc := protocol.NewPackReader(crs[a.idx])
+			a.packSrc = packSrc
+			a.tracked = &errTrackingReader{Reader: packSrc}
+			wg.Add(1)
+			go func(ai int, a *active) {
+				defer wg.Done()
+				for o, err := range amberpack.NewReader(a.tracked).All() {
+					if err != nil {
+						decodeErrs[ai] = err
+						return
+					}
+					kids, err := fstree.ChildKeys(o.Key, o.Bytes)
+					if err != nil {
+						decodeErrs[ai] = err
+						return
+					}
+					select {
+					case merged <- item{obj: packstore.Object{Key: o.Key, Data: o.Bytes}, kids: kids}:
+					case <-done:
+						return
+					}
+				}
+				// amberpack stops at its own end marker; drain through
+				// our TDataEnd frame so the channel is frame-aligned
+				// for the next round.
+				if _, err := io.Copy(io.Discard, a.packSrc); err != nil {
+					decodeErrs[ai] = err
+				}
+			}(ai, a)
+		}
+		go func() {
+			wg.Wait()
+			close(merged)
+		}()
+
 		var next []key.Key
 		received := make(map[key.Key]bool, len(wants))
-		packSrc := protocol.NewPackReader(cr)
-		tracked := &errTrackingReader{Reader: packSrc}
-		pr := amberpack.NewReader(tracked)
 		seq := func(yield func(packstore.Object, error) bool) {
-			for o, err := range pr.All() {
-				if err != nil {
-					yield(packstore.Object{}, err)
-					return
-				}
-				kids, err := fstree.ChildKeys(o.Key, o.Bytes)
-				if err != nil {
-					yield(packstore.Object{}, err)
-					return
-				}
-				received[o.Key] = true
-				next = append(next, kids...)
+			defer closeDone()
+			for it := range merged {
+				received[it.obj.Key] = true
+				next = append(next, it.kids...)
 				if prog != nil {
-					prog.Transferred(1, int64(len(o.Bytes)))
+					prog.Transferred(1, int64(len(it.obj.Data)))
 				}
-				if !yield(packstore.Object{Key: o.Key, Data: o.Bytes}, nil) {
+				if !yield(it.obj, nil) {
 					return
 				}
 			}
 		}
-		if _, err := st.WriteParallel(seq, packstore.WriteOpts{Verify: true}); err != nil {
-			// amberpack reports stream corruption with fmt.Errorf("%w: ...: %v",
-			// ErrMalformed, rawErr) — the %v loses the type of rawErr, so a
-			// *protocol.RemoteError carried inside the pack (a TErr frame the
-			// sender wrote after a local failure) is not reachable via
-			// errors.As on err. tracked recorded the untouched error from
-			// packSrc's Read before amberpack wrapped it; prefer it when set.
-			if terr := tracked.err; terr != nil {
-				return stats, terr
-			}
-			return stats, err
-		}
-		// amberpack's decoder stops at its own end marker; drain through
-		// our TDataEnd frame so the stream is positioned for the next round.
-		if _, err := io.Copy(io.Discard, packSrc); err != nil {
-			return stats, err
-		}
+		_, werr := st.WriteParallel(seq, packstore.WriteOpts{Verify: true})
+		closeDone()
+		wg.Wait()
 		stats.Received += len(received)
+
+		// A TErr the sender wrote inside a pack surfaces through the
+		// per-channel tracked readers; amberpack's own wrapping loses
+		// the error type, so prefer the tracked errors, then decode
+		// errors, then whatever the store reported.
+		var chanErrs []error
+		for ai, a := range actives {
+			if a.tracked != nil && a.tracked.err != nil {
+				if re := new(protocol.RemoteError); errors.As(a.tracked.err, &re) {
+					return stats, a.tracked.err
+				}
+			}
+			if decodeErrs[ai] != nil {
+				chanErrs = append(chanErrs, decodeErrs[ai])
+			}
+		}
+		if len(chanErrs) > 0 {
+			return stats, errors.Join(chanErrs...)
+		}
+		if werr != nil {
+			return stats, werr
+		}
 		if err := checkDelivered(received, wants); err != nil {
 			return stats, err
 		}
@@ -238,6 +321,16 @@ func Receive(rw io.ReadWriter, st *packstore.Store, root key.Key, jobs int, prog
 		// against the children just discovered and re-verifies presence.
 		frontier = append(next, carry...)
 	}
+}
+
+// shardWants deals wants round-robin across n shards. A shard can come
+// back empty; its channel then simply gets no frame that round.
+func shardWants(wants []key.Key, n int) [][]key.Key {
+	shards := make([][]key.Key, n)
+	for i, k := range wants {
+		shards[i%n] = append(shards[i%n], k)
+	}
+	return shards
 }
 
 // checkDelivered fails when the sender did not deliver every key this

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -101,7 +102,7 @@ func runPull(c *cli.Context, server string, addrs []string, relayURL string, noP
 		pwg.Go(func() { xfer.Run(pctx, os.Stderr, start, isTTY) })
 	}
 
-	if _, err := wantsync.Receive(stream, objects, root, 0, xfer); err != nil {
+	if _, err := wantsync.Receive([]io.ReadWriter{stream}, objects, root, 0, xfer); err != nil {
 		return err
 	}
 	xfer.Finish()

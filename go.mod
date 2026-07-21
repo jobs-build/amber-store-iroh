@@ -7,6 +7,7 @@ require (
 	github.com/fxamacker/cbor/v2 v2.9.2
 	github.com/tmc/go-iroh v0.0.0-20260714221401-b17af420bb03
 	github.com/urfave/cli/v2 v2.27.7
+	golang.org/x/sys v0.46.0
 )
 
 require (
@@ -56,7 +57,6 @@ require (
 	golang.org/x/exp v0.0.0-20240719175910-8a7402abbf56 // indirect
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
-	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/text v0.38.0 // indirect
 	google.golang.org/protobuf v1.33.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect

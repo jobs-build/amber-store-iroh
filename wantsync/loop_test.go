@@ -159,8 +159,8 @@ func receiveFromEmptyPackSender(t *testing.T, dest *packstore.Store, root key.Ke
 // recordingProgress sums observer callbacks; safe for the loop's
 // single-threaded use.
 type recordingProgress struct {
-	reqObjs, xferObjs   int
-	reqBytes, xferBytes int64
+	reqObjs, xferObjs              int
+	reqBytes, xferBytes, wireBytes int64
 }
 
 func (r *recordingProgress) Requested(objects int, bytes int64) {
@@ -171,6 +171,10 @@ func (r *recordingProgress) Requested(objects int, bytes int64) {
 func (r *recordingProgress) Transferred(objects int, bytes int64) {
 	r.xferObjs += objects
 	r.xferBytes += bytes
+}
+
+func (r *recordingProgress) Wire(bytes int64) {
+	r.wireBytes += bytes
 }
 
 // TestLoopReportsProgress drives a fresh sync with observers on both
@@ -209,6 +213,9 @@ func TestLoopReportsProgress(t *testing.T) {
 		// payload bytes from above.
 		if rec.xferBytes == 0 || rec.reqBytes < rec.xferBytes {
 			t.Fatalf("%s: requested %d bytes must be >= transferred %d", name, rec.reqBytes, rec.xferBytes)
+		}
+		if rec.wireBytes == 0 {
+			t.Fatalf("%s: wire bytes must be observed", name)
 		}
 	}
 }

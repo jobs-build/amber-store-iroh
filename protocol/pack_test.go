@@ -71,6 +71,62 @@ func TestPackRoundTrip(t *testing.T) {
 	}
 }
 
+// TestSendPackRecordsRoundTrip proves stored records are wire-format
+// identical: pre-encoded records pass through untouched and decode to
+// the original objects.
+func TestSendPackRecordsRoundTrip(t *testing.T) {
+	objs := testObjects(t, 4)
+	recs := make([][]byte, len(objs))
+	for i, o := range objs {
+		rec, err := amberpack.EncodeRecord(o.Key, o.Bytes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		recs[i] = rec
+	}
+	var buf bytes.Buffer
+	seq := func(yield func([]byte, error) bool) {
+		for _, r := range recs {
+			if !yield(r, nil) {
+				return
+			}
+		}
+	}
+	if err := SendPackRecords(&buf, seq); err != nil {
+		t.Fatalf("SendPackRecords: %v", err)
+	}
+	pr := NewPackReader(&buf)
+	var got []fstree.Object
+	for o, err := range amberpack.NewReader(pr).All() {
+		if err != nil {
+			t.Fatalf("read pack: %v", err)
+		}
+		got = append(got, o)
+	}
+	if _, err := io.Copy(io.Discard, pr); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != len(objs) {
+		t.Fatalf("got %d objects, want %d", len(got), len(objs))
+	}
+	for i := range objs {
+		if got[i].Key != objs[i].Key || !bytes.Equal(got[i].Bytes, objs[i].Bytes) {
+			t.Fatalf("object %d differs after record pass-through", i)
+		}
+	}
+}
+
+func TestSendPackRecordsPropagatesSourceError(t *testing.T) {
+	boom := errors.New("boom")
+	var buf bytes.Buffer
+	seq := func(yield func([]byte, error) bool) {
+		yield(nil, boom)
+	}
+	if err := SendPackRecords(&buf, seq); !errors.Is(err, boom) {
+		t.Fatalf("want boom, got %v", err)
+	}
+}
+
 func TestSendPackPropagatesSourceError(t *testing.T) {
 	objs := testObjects(t, 3)
 	boom := errors.New("boom")

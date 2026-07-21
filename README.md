@@ -40,9 +40,17 @@ transfers go direct rather than through a relay. `--advertise-addr
 ip[:port]` overrides auto-detection; `--relay URL` pins the fallback
 relay on either side.
 
-Throughput note: the current go-iroh transport tops out around 16 MB/s
-per connection even on loopback (parallel streams do not lift it); direct
-paths hit that ceiling, relayed paths are far slower.
+Throughput notes:
+
+- Records travel disk-to-wire verbatim (already zstd-compressed in the
+  packstore; the sender never decompresses or re-encodes). The progress
+  bar shows both content and wire rates.
+- On Linux, raise the kernel UDP buffers or QUIC throughput suffers and
+  quic-go prints a receive-buffer warning:
+  `sysctl -w net.core.rmem_max=8388608 net.core.wmem_max=8388608`
+- The current go-iroh transport tops out around 16 MB/s per connection
+  even on loopback (parallel streams do not lift it); direct paths hit
+  that ceiling, relayed paths are far slower.
 
 ## Development
 

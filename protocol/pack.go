@@ -67,6 +67,29 @@ func (c *chunkWriter) finish() error {
 	return WriteMsg(c.w, Msg{Type: TDataEnd})
 }
 
+// SendPackRecords serializes pre-encoded records (packstore.GetRecord /
+// amberpack.EncodeRecord output) as one amberpack embedded in TData
+// frames, terminated by TDataEnd — the zero-copy push path: stored
+// records are wire-format-identical, so no decompress/re-encode happens
+// here. Abort semantics match SendPack: an error from recs aborts the
+// pack without the terminator and is returned.
+func SendPackRecords(w io.Writer, recs iter.Seq2[[]byte, error]) error {
+	cw := &chunkWriter{w: w}
+	pw := amberpack.NewWriter(cw)
+	for rec, err := range recs {
+		if err != nil {
+			return err
+		}
+		if err := pw.AddRecord(rec); err != nil {
+			return err
+		}
+	}
+	if err := pw.Close(); err != nil {
+		return err
+	}
+	return cw.finish()
+}
+
 // NewPackReader returns a reader over the pack bytes of a TData…TDataEnd
 // frame sequence on r. It reads exactly through the TDataEnd frame, so the
 // underlying stream is positioned for the next frame afterwards.

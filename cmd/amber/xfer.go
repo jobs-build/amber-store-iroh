@@ -21,6 +21,7 @@ type XferProgress struct {
 	reqObjs    atomic.Int64
 	doneObjs   atomic.Int64
 	doneBytes  atomic.Int64
+	wireBytes  atomic.Int64
 	finished   atomic.Bool
 }
 
@@ -47,6 +48,16 @@ func (x *XferProgress) Transferred(objects int, bytes int64) {
 	x.doneBytes.Add(bytes)
 }
 
+// Wire records bytes crossing the stream (compressed records plus
+// framing) — the actual network cost, versus Transferred's content
+// bytes. nil-safe.
+func (x *XferProgress) Wire(bytes int64) {
+	if x == nil {
+		return
+	}
+	x.wireBytes.Add(bytes)
+}
+
 // Finish marks the transfer complete so the bar renders full. nil-safe.
 func (x *XferProgress) Finish() {
 	if x == nil {
@@ -62,10 +73,12 @@ func (x *XferProgress) render(elapsed time.Duration) string {
 	objs := x.doneObjs.Load()
 	req := x.reqObjs.Load()
 
+	wire := x.wireBytes.Load()
 	secs := elapsed.Seconds()
-	var rate float64
+	var rate, wireRate float64
 	if secs > 0 {
 		rate = float64(done) / secs
+		wireRate = float64(wire) / secs
 	}
 
 	pct := 0.0
@@ -79,12 +92,12 @@ func (x *XferProgress) render(elapsed time.Duration) string {
 		}
 	}
 
-	return fmt.Sprintf("%s %5.1f%% %s  %s/%s  %s/s  elapsed %s  objects %d/%d",
+	return fmt.Sprintf("%s %5.1f%% %s  %s/%s  %s/s (wire %s/s)  elapsed %s  objects %d/%d",
 		x.verb,
 		pct,
 		bar(pct, 16),
 		humanBytes(uint64(done)), humanBytes(uint64(x.totalBytes)),
-		humanBytes(uint64(rate)),
+		humanBytes(uint64(rate)), humanBytes(uint64(wireRate)),
 		fmtDuration(elapsed),
 		objs, req,
 	)
@@ -104,11 +117,14 @@ func (x *XferProgress) summary(elapsed time.Duration) string {
 	if objs == 0 {
 		return fmt.Sprintf("%s: everything up to date", x.verb)
 	}
+	wire := x.wireBytes.Load()
 	secs := elapsed.Seconds()
-	var rate float64
+	var rate, wireRate float64
 	if secs > 0 {
 		rate = float64(done) / secs
+		wireRate = float64(wire) / secs
 	}
-	return fmt.Sprintf("%sed %d objects, %s in %s (%s/s)",
-		x.verb, objs, humanBytes(uint64(done)), fmtDuration(elapsed), humanBytes(uint64(rate)))
+	return fmt.Sprintf("%sed %d objects, %s in %s (%s/s; wire %s, %s/s)",
+		x.verb, objs, humanBytes(uint64(done)), fmtDuration(elapsed), humanBytes(uint64(rate)),
+		humanBytes(uint64(wire)), humanBytes(uint64(wireRate)))
 }

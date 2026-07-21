@@ -22,7 +22,9 @@ import (
 	"github.com/fables-for-robots/amber-store-iroh/server"
 	"github.com/tmc/go-iroh/dns"
 	"github.com/tmc/go-iroh/iroh"
+	"github.com/tmc/go-iroh/iroh/mdns"
 	irohkey "github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 	"github.com/tmc/go-iroh/relay"
 	"github.com/urfave/cli/v2"
 )
@@ -123,9 +125,21 @@ func main() {
 			}
 			direct := directAddrPorts(ifaceAddrs, ep.LocalAddr().Port())
 			advertised := ep.Addr()
+			directTransport := make([]netaddr.TransportAddr, 0, len(direct))
 			for _, ap := range direct {
 				ep.AddExternalAddr(ap)
 				advertised = advertised.WithIP(ap)
+				directTransport = append(directTransport, netaddr.IPAddr{Addr: ap})
+			}
+
+			// Advertise the direct addresses on the local link too, so
+			// same-LAN clients resolve them over mDNS even when pkarr
+			// is stale or unreachable.
+			disc := mdns.New(ep.ID())
+			if err := disc.Start(ctx); err != nil {
+				log.Warn("mdns disabled", "error", err)
+			} else {
+				disc.Publish(dns.NewEndpointData(directTransport...))
 			}
 
 			// Publish the relay and direct addresses so clients can

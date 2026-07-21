@@ -5,9 +5,12 @@ go 1.26.5
 require (
 	github.com/fables-for-robots/amber-store-core v0.0.0-20260720222444-a37d35fa4ecf
 	github.com/fxamacker/cbor/v2 v2.9.2
+	github.com/tmc/go-iroh v0.0.0-20260714221401-b17af420bb03
+	github.com/urfave/cli/v2 v2.27.7
 )
 
 require (
+	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/DataDog/zstd v1.5.7 // indirect
 	github.com/FastFilter/xorfilter v0.5.1 // indirect
 	github.com/PlakarKorp/go-cdc-chunkers v1.0.3 // indirect
@@ -22,6 +25,8 @@ require (
 	github.com/cockroachdb/redact v1.1.5 // indirect
 	github.com/cockroachdb/swiss v0.0.0-20251224182025-b0f6560f979b // indirect
 	github.com/cockroachdb/tokenbucket v0.0.0-20230807174530-cc333fc44b06 // indirect
+	github.com/coder/websocket v1.8.14 // indirect
+	github.com/cpuguy83/go-md2man/v2 v2.0.7 // indirect
 	github.com/getsentry/sentry-go v0.27.0 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
 	github.com/go-git/go-billy/v5 v5.6.2 // indirect
@@ -41,9 +46,13 @@ require (
 	github.com/prometheus/client_model v0.3.0 // indirect
 	github.com/prometheus/common v0.42.0 // indirect
 	github.com/prometheus/procfs v0.10.1 // indirect
+	github.com/quic-go/quic-go v0.59.1 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
+	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
+	github.com/xrash/smetrics v0.0.0-20240521201337-686a1a2994c1 // indirect
 	github.com/zeebo/blake3 v0.2.4 // indirect
+	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/exp v0.0.0-20240719175910-8a7402abbf56 // indirect
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect
@@ -51,4 +60,5 @@ require (
 	golang.org/x/text v0.38.0 // indirect
 	google.golang.org/protobuf v1.33.0 // indirect
 	gopkg.in/warnings.v0 v0.1.2 // indirect
+	lukechampine.com/blake3 v1.4.1 // indirect
 )

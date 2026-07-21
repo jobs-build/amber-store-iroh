@@ -4,6 +4,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"github.com/fables-for-robots/amber-store-core/refstore"
 	"github.com/fables-for-robots/amber-store-iroh/protocol"
 	"github.com/fables-for-robots/amber-store-iroh/wantsync"
+	"github.com/tmc/go-iroh/iroh"
 )
 
 // Server answers amber-store-iroh operations against a single store.
@@ -178,4 +180,59 @@ func (s *Server) handlePull(rw io.ReadWriter, m protocol.Msg) error {
 		return err
 	}
 	return wantsync.Send(rw, s.objects)
+}
+
+// Serve accepts connections on ep until ctx is canceled, dispatching every
+// stream to HandleStream. After cancel it waits up to grace for in-flight
+// handlers before returning.
+func (s *Server) Serve(ctx context.Context, ep *iroh.Endpoint, grace time.Duration) error {
+	var wg sync.WaitGroup
+	for ctx.Err() == nil {
+		conn, err := ep.Accept(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				break
+			}
+			s.log.Error("accept", "error", err)
+			continue
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.serveConn(ctx, conn)
+		}()
+	}
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(grace):
+		s.log.Warn("shutdown grace elapsed with handlers in flight")
+	}
+	return nil
+}
+
+// serveConn accepts streams on one connection until the peer closes it or
+// ctx is canceled. Closing the QUIC connection discards undelivered
+// stream data, so the connection is only closed once the peer goes away —
+// except on ctx cancel, where AfterFunc closes it to unblock handlers.
+func (s *Server) serveConn(ctx context.Context, conn *iroh.Conn) {
+	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+	log := s.log.With("remote", conn.RemoteID())
+	log.Info("connection")
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	for {
+		stream, err := conn.AcceptStreamConn(ctx)
+		if err != nil {
+			return // peer closed the connection, or ctx canceled
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s.HandleStream(stream)
+		}()
+	}
 }

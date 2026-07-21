@@ -95,27 +95,52 @@ func decodeKeys(bs [][]byte) ([]key.Key, error) {
 	return out, nil
 }
 
+// Stats summarizes one Receive run for transfer accounting.
+type Stats struct {
+	Rounds    int   // want rounds sent, including the final empty one
+	Requested int   // keys requested across all rounds
+	Received  int   // objects delivered in packs
+	Bytes     int64 // wire bytes read: pack frames and payloads
+}
+
+// countingReader counts the bytes read through it.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
 // Receive runs the receiving half of the want loop over rw: rounds of
 // TWants → amberpack until nothing below root is missing. The final,
 // empty TWants tells the sender the loop is over. Received objects are
 // verified against their keys before being stored — the peer is untrusted.
-func Receive(rw io.ReadWriter, st *packstore.Store, root key.Key, jobs int) error {
+func Receive(rw io.ReadWriter, st *packstore.Store, root key.Key, jobs int) (Stats, error) {
+	var stats Stats
+	cr := &countingReader{r: rw}
 	frontier := []key.Key{root}
 	for {
 		wants, err := Wants(st, frontier, jobs)
 		if err != nil {
-			return err
+			return stats, err
 		}
 		wants, carry := splitWants(wants, maxWantsPerRound)
 		if err := protocol.WriteMsg(rw, protocol.Msg{Type: protocol.TWants, Keys: encodeKeys(wants)}); err != nil {
-			return err
+			return stats, err
 		}
+		stats.Rounds++
+		stats.Requested += len(wants)
 		if len(wants) == 0 {
-			return nil
+			stats.Bytes = cr.n
+			return stats, nil
 		}
 		var next []key.Key
 		received := make(map[key.Key]bool, len(wants))
-		packSrc := protocol.NewPackReader(rw)
+		packSrc := protocol.NewPackReader(cr)
 		tracked := &errTrackingReader{Reader: packSrc}
 		pr := amberpack.NewReader(tracked)
 		seq := func(yield func(packstore.Object, error) bool) {
@@ -144,17 +169,18 @@ func Receive(rw io.ReadWriter, st *packstore.Store, root key.Key, jobs int) erro
 			// errors.As on err. tracked recorded the untouched error from
 			// packSrc's Read before amberpack wrapped it; prefer it when set.
 			if terr := tracked.err; terr != nil {
-				return terr
+				return stats, terr
 			}
-			return err
+			return stats, err
 		}
 		// amberpack's decoder stops at its own end marker; drain through
 		// our TDataEnd frame so the stream is positioned for the next round.
 		if _, err := io.Copy(io.Discard, packSrc); err != nil {
-			return err
+			return stats, err
 		}
+		stats.Received += len(received)
 		if err := checkDelivered(received, wants); err != nil {
-			return err
+			return stats, err
 		}
 		// Carried-over wants rejoin the frontier; Wants dedupes them
 		// against the children just discovered and re-verifies presence.

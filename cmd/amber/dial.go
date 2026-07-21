@@ -9,16 +9,16 @@ import (
 	"time"
 
 	"github.com/fables-for-robots/amber-store-iroh/protocol"
+	"github.com/fables-for-robots/amber-store-iroh/relaymode"
 	"github.com/tmc/go-iroh/iroh"
 	"github.com/tmc/go-iroh/iroh/mdns"
 	irohkey "github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
-	"github.com/tmc/go-iroh/relay"
 	"github.com/urfave/cli/v2"
 )
 
 // serverFlags returns the flags shared by every network command.
-func serverFlags(server *string, addrs *cli.StringSlice) []cli.Flag {
+func serverFlags(server *string, addrs *cli.StringSlice, relayURL *string) []cli.Flag {
 	return []cli.Flag{
 		&cli.StringFlag{
 			Name:        "server",
@@ -30,6 +30,11 @@ func serverFlags(server *string, addrs *cli.StringSlice) []cli.Flag {
 			Name:        "addr",
 			Usage:       "direct server address host:port or ip:port (repeatable; skips discovery and relays)",
 			Destination: addrs,
+		},
+		&cli.StringFlag{
+			Name:        "relay",
+			Usage:       "relay server URL to use as the fallback path (default: the built-in relay map)",
+			Destination: relayURL,
 		},
 	}
 }
@@ -74,7 +79,7 @@ func parseDirectAddrs(ctx context.Context, addrs []string) ([]netip.AddrPort, er
 // dials straight at them — no discovery, no relays — which is also how
 // the offline end-to-end tests connect. Without them it resolves the
 // endpoint ID via pkarr and DNS like the irohese client.
-func dialServer(ctx context.Context, serverID string, directAddrs []string) (*iroh.Conn, func(), error) {
+func dialServer(ctx context.Context, serverID string, directAddrs []string, relayURL string) (*iroh.Conn, func(), error) {
 	id, err := irohkey.ParseEndpointID(serverID)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse endpoint id: %w", err)
@@ -122,11 +127,15 @@ func dialServer(ctx context.Context, serverID string, directAddrs []string) (*ir
 	services.AddResolver(pkarrResolver)
 	services.AddResolver(iroh.N0DNSAddressLookup(nil))
 
+	relayMode, err := relaymode.FromFlag(relayURL)
+	if err != nil {
+		return nil, nil, err
+	}
 	ep, err := iroh.Bind(
 		ctx,
 		iroh.WithSecretKey(sk),
 		iroh.WithAddressLookup(&services),
-		iroh.WithRelayMode(relay.ModeDefault()),
+		iroh.WithRelayMode(relayMode),
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("bind: %w", err)

@@ -19,6 +19,7 @@ import (
 	"github.com/fables-for-robots/amber-store-core/packstore"
 	"github.com/fables-for-robots/amber-store-core/refstore"
 	"github.com/fables-for-robots/amber-store-iroh/protocol"
+	"github.com/fables-for-robots/amber-store-iroh/relaymode"
 	"github.com/fables-for-robots/amber-store-iroh/server"
 	"github.com/tmc/go-iroh/dns"
 	"github.com/tmc/go-iroh/iroh"
@@ -30,6 +31,27 @@ import (
 )
 
 const shutdownGrace = 10 * time.Second
+
+// serverRelayMode picks the relay fallback: an explicit --relay URL wins;
+// otherwise the built-in map is reordered to prefer the lowest-latency
+// relay (the stock selection can land on a far-away region). Probing is
+// bounded and best-effort — on failure the default map is used as-is.
+func serverRelayMode(ctx context.Context, flag string, log *slog.Logger) (relay.Mode, error) {
+	if flag != "" {
+		return relaymode.FromFlag(flag)
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	m, err := relay.DefaultMap().PreferNearest(probeCtx, relay.HTTPConnectProber(nil))
+	if err != nil {
+		log.Warn("relay latency probe failed; using default relay map", "error", err)
+		return relay.ModeDefault(), nil
+	}
+	if urls := m.URLs(); len(urls) > 0 {
+		log.Info("preferred relay", "url", urls[0])
+	}
+	return relay.ModeCustom(m), nil
+}
 
 // loadOrCreateSecretKey reads the hex-encoded secret key from path,
 // generating and persisting a fresh one on first run. Deleting the file
@@ -74,6 +96,10 @@ func main() {
 				Value: "server.key",
 				Usage: "path to the secret key file (generated on first run)",
 			},
+			&cli.StringFlag{
+				Name:  "relay",
+				Usage: "relay server URL to use as the fallback path (default: nearest of the built-in relays)",
+			},
 		},
 		Action: func(c *cli.Context) error {
 			dir := c.String("store")
@@ -99,11 +125,16 @@ func main() {
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
 
+			relayMode, err := serverRelayMode(ctx, c.String("relay"), log)
+			if err != nil {
+				return err
+			}
+
 			ep, err := iroh.Bind(
 				ctx,
 				iroh.WithSecretKey(sk),
 				iroh.WithALPNs(protocol.ALPN),
-				iroh.WithRelayMode(relay.ModeDefault()),
+				iroh.WithRelayMode(relayMode),
 			)
 			if err != nil {
 				return fmt.Errorf("bind: %w", err)

@@ -13,24 +13,25 @@ import (
 
 func pullCommand() *cli.Command {
 	var (
-		server string
-		addrs  cli.StringSlice
+		server   string
+		addrs    cli.StringSlice
+		relayURL string
 	)
 	return &cli.Command{
 		Name:      "pull",
 		Usage:     "fetch ref NAME (and every missing object below it) from the server and set the local ref",
 		ArgsUsage: "NAME",
-		Flags:     serverFlags(&server, &addrs),
+		Flags:     serverFlags(&server, &addrs, &relayURL),
 		Action: func(c *cli.Context) error {
 			if c.NArg() != 1 {
 				return fmt.Errorf("pull requires exactly one NAME argument, got %d", c.NArg())
 			}
-			return runPull(c, server, addrs.Value(), c.Args().First())
+			return runPull(c, server, addrs.Value(), relayURL, c.Args().First())
 		},
 	}
 }
 
-func runPull(c *cli.Context, server string, addrs []string, name string) error {
+func runPull(c *cli.Context, server string, addrs []string, relayURL string, name string) error {
 	if err := reference.ValidateName(name); err != nil {
 		return err
 	}
@@ -43,7 +44,7 @@ func runPull(c *cli.Context, server string, addrs []string, name string) error {
 	}
 	defer closeStore(objects, refs)
 
-	conn, closeConn, err := dialServer(c.Context, server, addrs)
+	conn, closeConn, err := dialServer(c.Context, server, addrs, relayURL)
 	if err != nil {
 		return err
 	}

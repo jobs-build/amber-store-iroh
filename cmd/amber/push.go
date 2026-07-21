@@ -17,11 +17,12 @@ import (
 
 func pushCommand() *cli.Command {
 	var (
-		server string
-		addrs  cli.StringSlice
-		force  bool
+		server   string
+		addrs    cli.StringSlice
+		relayURL string
+		force    bool
 	)
-	flags := append(serverFlags(&server, &addrs),
+	flags := append(serverFlags(&server, &addrs, &relayURL),
 		&cli.BoolFlag{
 			Name:        "force",
 			Usage:       "overwrite the remote ref even if it changed since the last pull/push",
@@ -37,12 +38,12 @@ func pushCommand() *cli.Command {
 			if c.NArg() != 1 {
 				return fmt.Errorf("push requires exactly one NAME argument, got %d", c.NArg())
 			}
-			return runPush(c, server, addrs.Value(), force, c.Args().First())
+			return runPush(c, server, addrs.Value(), relayURL, force, c.Args().First())
 		},
 	}
 }
 
-func runPush(c *cli.Context, server string, addrs []string, force bool, name string) error {
+func runPush(c *cli.Context, server string, addrs []string, relayURL string, force bool, name string) error {
 	if strings.HasPrefix(name, trackingPrefix) {
 		return fmt.Errorf("ref %q: the %q namespace is reserved for remote-tracking refs", name, trackingPrefix)
 	}
@@ -72,7 +73,7 @@ func runPush(c *cli.Context, server string, addrs []string, force bool, name str
 		return err
 	}
 
-	conn, closeConn, err := dialServer(c.Context, server, addrs)
+	conn, closeConn, err := dialServer(c.Context, server, addrs, relayURL)
 	if err != nil {
 		return err
 	}

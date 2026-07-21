@@ -45,8 +45,9 @@ func TestPackRoundTrip(t *testing.T) {
 	if err := SendPack(&buf, seqOf(objs, -1, nil)); err != nil {
 		t.Fatalf("SendPack: %v", err)
 	}
+	pr := NewPackReader(&buf)
 	var got []fstree.Object
-	for o, err := range amberpack.NewReader(NewPackReader(&buf)).All() {
+	for o, err := range amberpack.NewReader(pr).All() {
 		if err != nil {
 			t.Fatalf("read pack: %v", err)
 		}
@@ -59,6 +60,10 @@ func TestPackRoundTrip(t *testing.T) {
 		if got[i].Key != objs[i].Key || !bytes.Equal(got[i].Bytes, objs[i].Bytes) {
 			t.Fatalf("object %d differs", i)
 		}
+	}
+	// amberpack stops at its own end marker; draining consumes TDataEnd.
+	if _, err := io.Copy(io.Discard, pr); err != nil {
+		t.Fatalf("drain: %v", err)
 	}
 	// The stream must be positioned exactly after TDataEnd.
 	if _, err := ReadMsg(&buf); !errors.Is(err, io.EOF) {

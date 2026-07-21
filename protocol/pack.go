@@ -70,6 +70,11 @@ func (c *chunkWriter) finish() error {
 // NewPackReader returns a reader over the pack bytes of a TData…TDataEnd
 // frame sequence on r. It reads exactly through the TDataEnd frame, so the
 // underlying stream is positioned for the next frame afterwards.
+//
+// The TDataEnd frame is only consumed by reading to EOF; amberpack's decoder
+// stops at its own end marker without triggering that read, so consumers must
+// drain the reader (io.Copy(io.Discard, pr)) before reading further frames
+// from the stream.
 func NewPackReader(r io.Reader) io.Reader {
 	return &packReader{r: r}
 }

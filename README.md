@@ -31,10 +31,14 @@ amber --store ./st restore ref:snap ./dest
 
 `--addr host:port` (repeatable, hostnames allowed) dials the server
 directly, skipping discovery and relays — useful on a LAN and used by the
-offline e2e tests. Without it, clients resolve the server via mDNS on the
-local link first, then pkarr/DNS; the server advertises its interface
-addresses both ways, so same-LAN transfers go direct rather than through
-a relay. `--relay URL` pins the fallback relay on either side.
+offline e2e tests. Without it, clients dial the union of all resolver
+candidates (mDNS on the local link, pkarr, DNS), keeping the relay as
+fallback; the server advertises its interface addresses both ways
+(skipping down interfaces and container bridges — every unreachable
+advertised address costs connecting peers handshake budget), so same-LAN
+transfers go direct rather than through a relay. `--advertise-addr
+ip[:port]` overrides auto-detection; `--relay URL` pins the fallback
+relay on either side.
 
 Throughput note: the current go-iroh transport tops out around 16 MB/s
 per connection even on loopback (parallel streams do not lift it); direct

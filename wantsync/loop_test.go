@@ -3,6 +3,7 @@ package wantsync
 import (
 	"errors"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 
@@ -88,6 +89,38 @@ func TestLoopResumesPartialTransfer(t *testing.T) {
 	}
 	if err := fstree.CheckComplete(root, dest.Get, dest.Has, 0); err != nil {
 		t.Fatalf("dest incomplete after resume: %v", err)
+	}
+}
+
+// TestLoopSenderOmitsWantedObject drives Receive against a sender that
+// answers every round with a well-formed but empty pack. The frontier
+// advances only through received objects, so without delivery
+// verification the loop would terminate as success over an empty store.
+func TestLoopSenderOmitsWantedObject(t *testing.T) {
+	_, root := buildTree(t)
+	dest := openStore(t)
+	a, b := pipePair()
+	go func() {
+		for {
+			m, err := protocol.ReadMsg(a)
+			if err != nil || m.Type != protocol.TWants || len(m.Keys) == 0 {
+				if c, ok := a.Writer.(io.Closer); ok {
+					c.Close()
+				}
+				return
+			}
+			empty := func(yield func(fstree.Object, error) bool) {}
+			if err := protocol.SendPack(a, empty); err != nil {
+				return
+			}
+		}
+	}()
+	err := Receive(b, dest, root, 0)
+	if err == nil {
+		t.Fatal("undelivered wants must fail the loop, not succeed")
+	}
+	if !strings.Contains(err.Error(), "omitted 1 of 1") {
+		t.Fatalf("error must name the missing wants: %v", err)
 	}
 }
 

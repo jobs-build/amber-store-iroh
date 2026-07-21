@@ -15,6 +15,21 @@ import (
 	"github.com/fables-for-robots/amber-store-iroh/protocol"
 )
 
+// maxWantsPerRound caps how many keys one TWants frame may carry. A very
+// wide frontier would otherwise encode past protocol.MaxFrame, which is a
+// permanent failure: re-running recomputes the same oversized round. The
+// remainder is carried into the next round instead.
+const maxWantsPerRound = 32 << 10
+
+// splitWants divides wants into the keys to request this round and the
+// remainder to defer to the next one.
+func splitWants(wants []key.Key, max int) (send, carry []key.Key) {
+	if len(wants) <= max {
+		return wants, nil
+	}
+	return wants[:max], wants[max:]
+}
+
 // Wants partitions frontier into the keys that must be transferred. A key
 // is pruned only when its object is present AND the whole subtree below it
 // is complete — presence alone is not enough, because an interrupted
@@ -91,6 +106,7 @@ func Receive(rw io.ReadWriter, st *packstore.Store, root key.Key, jobs int) erro
 		if err != nil {
 			return err
 		}
+		wants, carry := splitWants(wants, maxWantsPerRound)
 		if err := protocol.WriteMsg(rw, protocol.Msg{Type: protocol.TWants, Keys: encodeKeys(wants)}); err != nil {
 			return err
 		}
@@ -135,8 +151,38 @@ func Receive(rw io.ReadWriter, st *packstore.Store, root key.Key, jobs int) erro
 		if _, err := io.Copy(io.Discard, packSrc); err != nil {
 			return err
 		}
-		frontier = next
+		if err := checkDelivered(st, wants); err != nil {
+			return err
+		}
+		// Carried-over wants rejoin the frontier; Wants dedupes them
+		// against the children just discovered and re-verifies presence.
+		frontier = append(next, carry...)
 	}
+}
+
+// checkDelivered fails when the sender did not deliver every key this
+// round asked for. The frontier only advances to children of received
+// objects, so an omitted want would otherwise vanish silently and let an
+// incomplete tree end the loop as success.
+func checkDelivered(st *packstore.Store, wants []key.Key) error {
+	missing := 0
+	var example key.Key
+	for _, k := range wants {
+		ok, err := st.Has(k)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			if missing == 0 {
+				example = k
+			}
+			missing++
+		}
+	}
+	if missing > 0 {
+		return fmt.Errorf("sender omitted %d of %d requested objects (e.g. %s)", missing, len(wants), example)
+	}
+	return nil
 }
 
 // Send runs the sending half: answer each TWants round with a pack of
@@ -162,6 +208,7 @@ func Send(rw io.ReadWriter, st *packstore.Store) error {
 		if err != nil {
 			return err
 		}
+		keys = dedupeKeys(keys)
 		st.SortByLocation(keys)
 		seq := func(yield func(fstree.Object, error) bool) {
 			for _, k := range keys {
@@ -181,6 +228,21 @@ func Send(rw io.ReadWriter, st *packstore.Store) error {
 			return err
 		}
 	}
+}
+
+// dedupeKeys drops repeats, keeping first-seen order: a peer that asks
+// for one key many times must not get its bytes many times.
+func dedupeKeys(keys []key.Key) []key.Key {
+	seen := make(map[key.Key]bool, len(keys))
+	out := keys[:0]
+	for _, k := range keys {
+		if seen[k] {
+			continue
+		}
+		seen[k] = true
+		out = append(out, k)
+	}
+	return out
 }
 
 // errTrackingReader remembers the last non-EOF error a Read returned,

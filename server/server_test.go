@@ -152,6 +152,90 @@ func TestPushRejectsBadName(t *testing.T) {
 	}
 }
 
+// TestPushTransferFailureReportsErr pins the spec rule that every failure
+// reaches the peer as a TErr frame: a sender that never delivers the
+// wanted objects must be told why, not left with a bare EOF.
+func TestPushTransferFailureReportsErr(t *testing.T) {
+	srv := testServer(t)
+	_, root := clientStore(t)
+	c, s := net.Pipe()
+	done := make(chan struct{})
+	go func() { defer close(done); srv.HandleStream(s) }()
+	defer func() { c.Close(); <-done }()
+	if err := protocol.WriteMsg(c, protocol.Msg{Type: protocol.TPush, Name: "r", Root: root[:]}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := protocol.ReadMsg(c)
+	if err != nil || m.Type != protocol.TWants {
+		t.Fatalf("want TWants, got %+v %v", m, err)
+	}
+	empty := func(yield func(fstree.Object, error) bool) {}
+	if err := protocol.SendPack(c, empty); err != nil {
+		t.Fatal(err)
+	}
+	m, err = protocol.ReadMsg(c)
+	if err != nil {
+		t.Fatalf("expected a TErr frame, got read error %v", err)
+	}
+	if m.Type != protocol.TErr || m.Code != protocol.CodeInternal {
+		t.Fatalf("want internal TErr, got %+v", m)
+	}
+}
+
+// TestPushDoesNotEchoPeerError checks the exception: an error the peer
+// itself reported must not be sent back to it.
+func TestPushDoesNotEchoPeerError(t *testing.T) {
+	srv := testServer(t)
+	_, root := clientStore(t)
+	c, s := net.Pipe()
+	done := make(chan struct{})
+	go func() { defer close(done); srv.HandleStream(s) }()
+	defer func() { c.Close(); <-done }()
+	if err := protocol.WriteMsg(c, protocol.Msg{Type: protocol.TPush, Name: "r", Root: root[:]}); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := protocol.ReadMsg(c); err != nil || m.Type != protocol.TWants {
+		t.Fatalf("want TWants, got %+v %v", m, err)
+	}
+	sent := protocol.Msg{Type: protocol.TErr, Code: protocol.CodeInternal, Text: "client-side read failed"}
+	if err := protocol.WriteMsg(c, sent); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := protocol.ReadMsg(c); err == nil {
+		t.Fatalf("server echoed the peer's error back: %+v", m)
+	}
+}
+
+// TestPullBadWantsReportsErr covers the same rule on the pull path, where
+// the failure originates in wantsync.Send's key decoding.
+func TestPullBadWantsReportsErr(t *testing.T) {
+	srv := testServer(t)
+	st, root := clientStore(t)
+	if m, err := doPush(t, srv, st, "r", root, true, nil); err != nil || m.Type != protocol.TOK {
+		t.Fatalf("push: %+v %v", m, err)
+	}
+	c, s := net.Pipe()
+	done := make(chan struct{})
+	go func() { defer close(done); srv.HandleStream(s) }()
+	defer func() { c.Close(); <-done }()
+	if err := protocol.WriteMsg(c, protocol.Msg{Type: protocol.TPull, Name: "r"}); err != nil {
+		t.Fatal(err)
+	}
+	if m, err := protocol.ReadMsg(c); err != nil || m.Type != protocol.TRef {
+		t.Fatalf("want TRef, got %+v %v", m, err)
+	}
+	if err := protocol.WriteMsg(c, protocol.Msg{Type: protocol.TWants, Keys: [][]byte{{1, 2, 3}}}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := protocol.ReadMsg(c)
+	if err != nil {
+		t.Fatalf("expected a TErr frame, got read error %v", err)
+	}
+	if m.Type != protocol.TErr || m.Code != protocol.CodeInternal {
+		t.Fatalf("want internal TErr, got %+v", m)
+	}
+}
+
 func TestPullUnknownRef(t *testing.T) {
 	srv := testServer(t)
 	c, s := net.Pipe()

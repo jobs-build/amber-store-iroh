@@ -3,11 +3,13 @@ package wantsync
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/fables-for-robots/amber-store-core/ingest"
 	"github.com/fables-for-robots/amber-store-core/key"
 	"github.com/fables-for-robots/amber-store-core/packstore"
+	"github.com/fables-for-robots/amber-store-iroh/protocol"
 )
 
 // buildTree ingests a small directory tree into a fresh packstore and
@@ -101,6 +103,81 @@ func TestWantsDedupes(t *testing.T) {
 	}
 	if len(wants) != 1 {
 		t.Fatalf("want deduped [root], got %v", wants)
+	}
+}
+
+// mkKeys returns n distinct keys, cheaply and without any store.
+func mkKeys(n int) []key.Key {
+	out := make([]key.Key, n)
+	for i := range out {
+		out[i][0] = byte(i)
+		out[i][1] = byte(i >> 8)
+		out[i][2] = byte(i >> 16)
+	}
+	return out
+}
+
+func TestSplitWantsUnderCap(t *testing.T) {
+	wants := mkKeys(5)
+	send, carry := splitWants(wants, 8)
+	if len(send) != 5 || carry != nil {
+		t.Fatalf("send=%d carry=%d, want all sent", len(send), len(carry))
+	}
+}
+
+func TestSplitWantsOverCapCarriesRemainder(t *testing.T) {
+	wants := mkKeys(20)
+	send, carry := splitWants(wants, 8)
+	if len(send) != 8 || len(carry) != 12 {
+		t.Fatalf("send=%d carry=%d, want 8/12", len(send), len(carry))
+	}
+	// Every want must appear exactly once across the split, in order.
+	joined := append(append([]key.Key{}, send...), carry...)
+	for i := range wants {
+		if joined[i] != wants[i] {
+			t.Fatalf("split reordered at %d", i)
+		}
+	}
+}
+
+// TestSplitWantsAtCap pins the boundary: exactly max keys ship in one
+// round with nothing carried, so an empty want list can never be produced
+// by the split itself (which would end the loop early).
+func TestSplitWantsAtCap(t *testing.T) {
+	send, carry := splitWants(mkKeys(8), 8)
+	if len(send) != 8 || carry != nil {
+		t.Fatalf("send=%d carry=%d", len(send), len(carry))
+	}
+}
+
+func TestSplitWantsRespectsFrameLimit(t *testing.T) {
+	// A full round must encode inside one frame with room to spare for
+	// the message's other fields.
+	if maxWantsPerRound*(key.Size+2) > protocol.MaxFrame/2 {
+		t.Fatalf("maxWantsPerRound %d is too large for MaxFrame %d", maxWantsPerRound, protocol.MaxFrame)
+	}
+}
+
+func TestDedupeKeys(t *testing.T) {
+	a, b := mkKeys(2)[0], mkKeys(2)[1]
+	got := dedupeKeys([]key.Key{a, b, a, a, b})
+	if len(got) != 2 || got[0] != a || got[1] != b {
+		t.Fatalf("dedupe got %d keys, want [a b]", len(got))
+	}
+}
+
+func TestCheckDeliveredReportsMissing(t *testing.T) {
+	st, root := buildTree(t)
+	if err := checkDelivered(st, []key.Key{root}); err != nil {
+		t.Fatalf("present key: %v", err)
+	}
+	absent := mkKeys(1)[0]
+	err := checkDelivered(st, []key.Key{root, absent})
+	if err == nil {
+		t.Fatal("absent key must be reported")
+	}
+	if !strings.Contains(err.Error(), "1 of 2") || !strings.Contains(err.Error(), absent.String()) {
+		t.Fatalf("error must name the count and an example: %v", err)
 	}
 }
 

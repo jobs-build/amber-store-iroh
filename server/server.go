@@ -85,6 +85,17 @@ func (s *Server) fail(w io.Writer, code string, err error) error {
 	return err
 }
 
+// failLocal reports a transfer failure to the peer as a TErr frame, as the
+// spec requires of every failure — except when the error came from the peer
+// itself (*protocol.RemoteError), which must not be echoed back.
+func (s *Server) failLocal(w io.Writer, err error) error {
+	var re *protocol.RemoteError
+	if errors.As(err, &re) {
+		return err
+	}
+	return s.fail(w, protocol.CodeInternal, err)
+}
+
 func (s *Server) handleRefList(rw io.ReadWriter) error {
 	records, err := s.refs.All()
 	if err != nil {
@@ -117,7 +128,7 @@ func (s *Server) handlePush(rw io.ReadWriter, m protocol.Msg) error {
 		}
 	}
 	if err := wantsync.Receive(rw, s.objects, root, s.jobs); err != nil {
-		return err
+		return s.failLocal(rw, err)
 	}
 	unlock := s.lockRef(m.Name)
 	defer unlock()
@@ -179,7 +190,10 @@ func (s *Server) handlePull(rw io.ReadWriter, m protocol.Msg) error {
 	if err := protocol.WriteMsg(rw, protocol.Msg{Type: protocol.TRef, Record: raw}); err != nil {
 		return err
 	}
-	return wantsync.Send(rw, s.objects)
+	if err := wantsync.Send(rw, s.objects); err != nil {
+		return s.failLocal(rw, err)
+	}
+	return nil
 }
 
 // Serve accepts connections on ep until ctx is canceled, dispatching every

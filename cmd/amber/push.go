@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/fables-for-robots/amber-store-core/key"
@@ -42,6 +43,9 @@ func pushCommand() *cli.Command {
 }
 
 func runPush(c *cli.Context, server string, addrs []string, force bool, name string) error {
+	if strings.HasPrefix(name, trackingPrefix) {
+		return fmt.Errorf("ref %q: the %q namespace is reserved for remote-tracking refs", name, trackingPrefix)
+	}
 	objects, refs, err := openStore(c)
 	if err != nil {
 		return err

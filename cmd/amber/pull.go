@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/fables-for-robots/amber-store-core/key"
 	"github.com/fables-for-robots/amber-store-core/reference"
@@ -32,6 +33,9 @@ func pullCommand() *cli.Command {
 func runPull(c *cli.Context, server string, addrs []string, name string) error {
 	if err := reference.ValidateName(name); err != nil {
 		return err
+	}
+	if strings.HasPrefix(name, trackingPrefix) {
+		return fmt.Errorf("ref %q: the %q namespace is reserved for remote-tracking refs", name, trackingPrefix)
 	}
 	objects, refs, err := openStore(c)
 	if err != nil {

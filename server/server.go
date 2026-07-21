@@ -130,7 +130,7 @@ func (s *Server) handlePush(remote string, rw io.ReadWriter, m protocol.Msg) err
 			return err
 		}
 	}
-	stats, err := wantsync.Receive(rw, s.objects, root, s.jobs)
+	stats, err := wantsync.Receive(rw, s.objects, root, s.jobs, nil)
 	if err != nil {
 		return s.failLocal(rw, err)
 	}
@@ -224,7 +224,7 @@ func (s *Server) handlePull(rw io.ReadWriter, m protocol.Msg) error {
 	if err := protocol.WriteMsg(rw, protocol.Msg{Type: protocol.TRef, Record: raw}); err != nil {
 		return err
 	}
-	if err := wantsync.Send(rw, s.objects); err != nil {
+	if err := wantsync.Send(rw, s.objects, nil); err != nil {
 		return s.failLocal(rw, err)
 	}
 	return nil

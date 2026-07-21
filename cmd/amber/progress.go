@@ -94,6 +94,13 @@ func (p *Progress) render(elapsed time.Duration) string {
 // final summary line (a TTY clears its in-place bar so the root prints clean).
 // start is injected so the caller owns the clock.
 func (p *Progress) Run(ctx context.Context, w io.Writer, start time.Time, isTTY bool) {
+	runProgressLoop(ctx, w, isTTY, p.render, start)
+}
+
+// runProgressLoop is the shared render loop behind Progress.Run and
+// XferProgress.Run: it draws render's line until ctx is cancelled, in
+// place on a TTY and as plain lines at a slower cadence otherwise.
+func runProgressLoop(ctx context.Context, w io.Writer, isTTY bool, render func(time.Duration) string, start time.Time) {
 	interval := 150 * time.Millisecond
 	if !isTTY {
 		interval = 2 * time.Second
@@ -101,7 +108,7 @@ func (p *Progress) Run(ctx context.Context, w io.Writer, start time.Time, isTTY 
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	draw := func() {
-		line := p.render(time.Since(start))
+		line := render(time.Since(start))
 		if isTTY {
 			fmt.Fprintf(w, "\r\033[K%s", line)
 		} else {

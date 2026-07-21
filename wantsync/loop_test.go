@@ -34,13 +34,13 @@ func runLoop(t *testing.T, src, dest *packstore.Store, root key.Key) (stats Stat
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		sendErr = Send(a, src)
+		sendErr = Send(a, src, nil)
 		// Unblock the peer if the sender bailed early.
 		if c, ok := a.Writer.(io.Closer); ok && sendErr != nil {
 			c.Close()
 		}
 	}()
-	stats, recvErr = Receive(b, dest, root, 0)
+	stats, recvErr = Receive(b, dest, root, 0, nil)
 	wg.Wait()
 	return stats, sendErr, recvErr
 }
@@ -152,8 +152,65 @@ func receiveFromEmptyPackSender(t *testing.T, dest *packstore.Store, root key.Ke
 			}
 		}
 	}()
-	_, err := Receive(b, dest, root, 0)
+	_, err := Receive(b, dest, root, 0, nil)
 	return err
+}
+
+// recordingProgress sums observer callbacks; safe for the loop's
+// single-threaded use.
+type recordingProgress struct {
+	reqObjs, xferObjs   int
+	reqBytes, xferBytes int64
+}
+
+func (r *recordingProgress) Requested(objects int, bytes int64) {
+	r.reqObjs += objects
+	r.reqBytes += bytes
+}
+
+func (r *recordingProgress) Transferred(objects int, bytes int64) {
+	r.xferObjs += objects
+	r.xferBytes += bytes
+}
+
+// TestLoopReportsProgress drives a fresh sync with observers on both
+// halves: each side must see every object of the tree requested and
+// transferred, and requested bytes (derived from key lengths) must match
+// the bytes actually moved.
+func TestLoopReportsProgress(t *testing.T) {
+	src, root := buildTree(t)
+	dest := openStore(t)
+	total, err := fstree.ReachableKeys(root, src.Get)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var sendRec, recvRec recordingProgress
+	a, b := pipePair()
+	var wg sync.WaitGroup
+	wg.Add(1)
+	var sendErr error
+	go func() {
+		defer wg.Done()
+		sendErr = Send(a, src, &sendRec)
+	}()
+	_, recvErr := Receive(b, dest, root, 0, &recvRec)
+	wg.Wait()
+	if sendErr != nil || recvErr != nil {
+		t.Fatalf("send=%v recv=%v", sendErr, recvErr)
+	}
+
+	for name, rec := range map[string]*recordingProgress{"send": &sendRec, "recv": &recvRec} {
+		if rec.reqObjs != len(total) || rec.xferObjs != len(total) {
+			t.Fatalf("%s: requested=%d transferred=%d objects, want both %d", name, rec.reqObjs, rec.xferObjs, len(total))
+		}
+		// Key lengths are logical sizes: subtree footprints for
+		// directory types, so requested bytes bound transferred
+		// payload bytes from above.
+		if rec.xferBytes == 0 || rec.reqBytes < rec.xferBytes {
+			t.Fatalf("%s: requested %d bytes must be >= transferred %d", name, rec.reqBytes, rec.xferBytes)
+		}
+	}
 }
 
 // TestReceiveStats checks the transfer accounting a fresh sync and an

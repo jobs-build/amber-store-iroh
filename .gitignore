@@ -29,3 +29,5 @@ profile.cov
 output/
 
 !.claude/settings.local.json
+
+server.key

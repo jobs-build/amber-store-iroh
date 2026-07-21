@@ -10,8 +10,9 @@ func TestXferRender(t *testing.T) {
 	x := NewXferProgress("push", 200)
 	x.Requested(10, 220)
 	x.Transferred(3, 50)
+	x.Wire(30)
 	line := x.render(2 * time.Second)
-	for _, want := range []string{"push", " 25.0% ", "50 B/200 B", "25 B/s", "elapsed 0:02", "objects 3/10"} {
+	for _, want := range []string{"push", " 25.0% ", "50 B/200 B", "25 B/s", "(wire 15 B/s)", "elapsed 0:02", "objects 3/10"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("render missing %q: %s", want, line)
 		}
@@ -43,8 +44,9 @@ func TestXferSummary(t *testing.T) {
 		t.Fatalf("empty transfer summary: %q", got)
 	}
 	x.Transferred(12, 2048)
+	x.Wire(1024)
 	got := x.summary(2 * time.Second)
-	for _, want := range []string{"pushed 12 objects", "2.0 KiB", "0:02", "1.0 KiB/s"} {
+	for _, want := range []string{"pushed 12 objects", "2.0 KiB", "0:02", "1.0 KiB/s", "wire 1.0 KiB", "512 B/s"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("summary missing %q: %q", want, got)
 		}
@@ -55,5 +57,6 @@ func TestXferNilSafe(t *testing.T) {
 	var x *XferProgress
 	x.Requested(1, 1)
 	x.Transferred(1, 1)
+	x.Wire(1)
 	x.Finish()
 }

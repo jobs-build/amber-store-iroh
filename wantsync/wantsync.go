@@ -106,6 +106,9 @@ func decodeKeys(bs [][]byte) ([]key.Key, error) {
 type Progress interface {
 	Requested(objects int, bytes int64)
 	Transferred(objects int, bytes int64)
+	// Wire reports bytes as they cross the stream (compressed records
+	// plus framing), called from the transfer's read/write path.
+	Wire(bytes int64)
 }
 
 // keyBytes sums the logical lengths embedded in keys — an upper bound
@@ -127,15 +130,34 @@ type Stats struct {
 	Bytes     int64 // wire bytes read: pack frames and payloads
 }
 
-// countingReader counts the bytes read through it.
+// countingReader counts the bytes read through it, reporting them to an
+// optional Progress as they arrive.
 type countingReader struct {
-	r io.Reader
-	n int64
+	r    io.Reader
+	n    int64
+	prog Progress
 }
 
 func (c *countingReader) Read(p []byte) (int, error) {
 	n, err := c.r.Read(p)
 	c.n += int64(n)
+	if c.prog != nil && n > 0 {
+		c.prog.Wire(int64(n))
+	}
+	return n, err
+}
+
+// wireWriter reports bytes written to the stream to a Progress.
+type wireWriter struct {
+	w    io.Writer
+	prog Progress
+}
+
+func (w *wireWriter) Write(p []byte) (int, error) {
+	n, err := w.w.Write(p)
+	if w.prog != nil && n > 0 {
+		w.prog.Wire(int64(n))
+	}
 	return n, err
 }
 
@@ -145,7 +167,7 @@ func (c *countingReader) Read(p []byte) (int, error) {
 // verified against their keys before being stored — the peer is untrusted.
 func Receive(rw io.ReadWriter, st *packstore.Store, root key.Key, jobs int, prog Progress) (Stats, error) {
 	var stats Stats
-	cr := &countingReader{r: rw}
+	cr := &countingReader{r: rw, prog: prog}
 	frontier := []key.Key{root}
 	for {
 		wants, err := Wants(st, frontier, jobs)
@@ -271,22 +293,31 @@ func Send(rw io.ReadWriter, st *packstore.Store, prog Progress) error {
 			prog.Requested(len(keys), keyBytes(keys))
 		}
 		st.SortByLocation(keys)
-		seq := func(yield func(fstree.Object, error) bool) {
+		// Zero-copy push path: stored records are wire-format identical
+		// (header + still-compressed payload), so they go out verbatim —
+		// no decompress/re-encode. ParseRecord validates framing and CRC
+		// and yields the uncompressed length for progress accounting.
+		seq := func(yield func([]byte, error) bool) {
 			for _, k := range keys {
-				data, err := st.Get(k)
+				rec, err := st.GetRecord(k)
 				if err != nil {
-					yield(fstree.Object{}, fmt.Errorf("object %s: %w", k, err))
+					yield(nil, fmt.Errorf("object %s: %w", k, err))
+					return
+				}
+				hdr, err := amberpack.ParseRecord(rec)
+				if err != nil {
+					yield(nil, fmt.Errorf("object %s: stored record: %w", k, err))
 					return
 				}
 				if prog != nil {
-					prog.Transferred(1, int64(len(data)))
+					prog.Transferred(1, int64(hdr.Ulen))
 				}
-				if !yield(fstree.Object{Key: k, Bytes: data}, nil) {
+				if !yield(rec, nil) {
 					return
 				}
 			}
 		}
-		if err := protocol.SendPack(rw, seq); err != nil {
+		if err := protocol.SendPackRecords(&wireWriter{w: rw, prog: prog}, seq); err != nil {
 			// Best effort: tell the peer why the pack stopped short.
 			_ = protocol.WriteMsg(rw, protocol.Msg{Type: protocol.TErr, Code: protocol.CodeInternal, Text: err.Error()})
 			return err

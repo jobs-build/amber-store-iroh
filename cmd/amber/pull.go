@@ -77,7 +77,7 @@ func runPull(c *cli.Context, server string, addrs []string, relayURL string, nam
 		return fmt.Errorf("server ref record key: %w", err)
 	}
 
-	if err := wantsync.Receive(stream, objects, root, 0); err != nil {
+	if _, err := wantsync.Receive(stream, objects, root, 0); err != nil {
 		return err
 	}
 	if err := stream.Close(); err != nil {

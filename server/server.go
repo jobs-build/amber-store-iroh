@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/fables-for-robots/amber-store-core/fstree"
 	"github.com/fables-for-robots/amber-store-core/key"
 	"github.com/fables-for-robots/amber-store-core/packstore"
 	"github.com/fables-for-robots/amber-store-core/reference"
@@ -56,8 +57,9 @@ func (s *Server) lockRef(name string) (unlock func()) {
 
 // HandleStream serves one operation on one stream and closes it. The
 // stream is FIN-closed after the final response frame; the connection
-// stays up for further streams.
-func (s *Server) HandleStream(rw io.ReadWriteCloser) {
+// stays up for further streams. remote identifies the connection's peer
+// for per-operation logging.
+func (s *Server) HandleStream(remote string, rw io.ReadWriteCloser) {
 	defer rw.Close()
 	m, err := protocol.ReadMsg(rw)
 	if err != nil {
@@ -68,7 +70,7 @@ func (s *Server) HandleStream(rw io.ReadWriteCloser) {
 	case protocol.TRefList:
 		err = s.handleRefList(rw)
 	case protocol.TPush:
-		err = s.handlePush(rw, m)
+		err = s.handlePush(remote, rw, m)
 	case protocol.TPull:
 		err = s.handlePull(rw, m)
 	default:
@@ -112,7 +114,8 @@ func (s *Server) handleRefList(rw io.ReadWriter) error {
 	return protocol.WriteMsg(rw, protocol.Msg{Type: protocol.TRefs, Refs: infos})
 }
 
-func (s *Server) handlePush(rw io.ReadWriter, m protocol.Msg) error {
+func (s *Server) handlePush(remote string, rw io.ReadWriter, m protocol.Msg) error {
+	start := time.Now()
 	if err := reference.ValidateName(m.Name); err != nil {
 		return s.fail(rw, protocol.CodeBadRequest, err)
 	}
@@ -127,7 +130,8 @@ func (s *Server) handlePush(rw io.ReadWriter, m protocol.Msg) error {
 			return err
 		}
 	}
-	if err := wantsync.Receive(rw, s.objects, root, s.jobs); err != nil {
+	stats, err := wantsync.Receive(rw, s.objects, root, s.jobs)
+	if err != nil {
 		return s.failLocal(rw, err)
 	}
 	unlock := s.lockRef(m.Name)
@@ -145,7 +149,37 @@ func (s *Server) handlePush(rw io.ReadWriter, m protocol.Msg) error {
 	if err := s.refs.Put(m.Name, raw); err != nil {
 		return s.fail(rw, protocol.CodeInternal, err)
 	}
-	return protocol.WriteMsg(rw, protocol.Msg{Type: protocol.TOK, Key: root[:]})
+	if err := protocol.WriteMsg(rw, protocol.Msg{Type: protocol.TOK, Key: root[:]}); err != nil {
+		return err
+	}
+	s.logPush(remote, m.Name, root, stats, time.Since(start))
+	return nil
+}
+
+// logPush reports one committed push: "offered" is the object count of
+// the whole pushed tree, "transferred" what actually crossed the wire —
+// the difference is what deduplication saved. Counting offered walks the
+// tree's interior nodes, a bounded local-read cost per push.
+func (s *Server) logPush(remote, name string, root key.Key, stats wantsync.Stats, d time.Duration) {
+	offered := -1
+	if keys, err := fstree.ReachableKeys(root, s.objects.Get); err == nil {
+		offered = len(keys)
+	} else {
+		s.log.Warn("push accounting walk failed", "ref", name, "error", err)
+	}
+	throughput := 0.0
+	if d > 0 {
+		throughput = float64(stats.Bytes) / 1e6 / d.Seconds()
+	}
+	s.log.Info("push",
+		"ref", name,
+		"client", remote,
+		"offered", offered,
+		"transferred", stats.Received,
+		"bytes", stats.Bytes,
+		"duration", d.Round(time.Millisecond),
+		"throughput", fmt.Sprintf("%.1f MB/s", throughput),
+	)
 }
 
 // checkCAS verifies the push precondition: ExpectedOld must equal the
@@ -249,7 +283,7 @@ func (s *Server) serveConn(ctx context.Context, conn *iroh.Conn) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s.HandleStream(stream)
+			s.HandleStream(conn.RemoteID().String(), stream)
 		}()
 	}
 }

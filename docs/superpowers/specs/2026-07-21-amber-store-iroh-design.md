@@ -66,6 +66,9 @@ cmd/amber-serve        cmd/amber (client)
 - Ref updates are serialized per ref name (per-name lock) so
   compare-and-swap is race-free under concurrent pushes. Object writes rely
   on packstore's parallel, deduplicating writers.
+- Every committed push is logged with the ref name, client endpoint ID,
+  objects offered (whole tree) vs actually transferred, wire bytes,
+  duration, and throughput.
 - Shutdown on SIGINT/SIGTERM: stop accepting and close open connections
   immediately — interrupted transfers are resumable by design — then wait
   a bounded grace for handler cleanup.

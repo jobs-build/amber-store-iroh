@@ -27,7 +27,7 @@ func pipePair() (duplex, duplex) {
 }
 
 // runLoop drives Send on src and Receive on dest concurrently.
-func runLoop(t *testing.T, src, dest *packstore.Store, root key.Key) (sendErr, recvErr error) {
+func runLoop(t *testing.T, src, dest *packstore.Store, root key.Key) (stats Stats, sendErr, recvErr error) {
 	t.Helper()
 	a, b := pipePair()
 	var wg sync.WaitGroup
@@ -40,15 +40,15 @@ func runLoop(t *testing.T, src, dest *packstore.Store, root key.Key) (sendErr, r
 			c.Close()
 		}
 	}()
-	recvErr = Receive(b, dest, root, 0)
+	stats, recvErr = Receive(b, dest, root, 0)
 	wg.Wait()
-	return sendErr, recvErr
+	return stats, sendErr, recvErr
 }
 
 func TestLoopSyncsIntoEmptyStore(t *testing.T) {
 	src, root := buildTree(t)
 	dest := openStore(t)
-	sendErr, recvErr := runLoop(t, src, dest, root)
+	_, sendErr, recvErr := runLoop(t, src, dest, root)
 	if sendErr != nil || recvErr != nil {
 		t.Fatalf("send=%v recv=%v", sendErr, recvErr)
 	}
@@ -60,10 +60,10 @@ func TestLoopSyncsIntoEmptyStore(t *testing.T) {
 func TestLoopIsIdempotent(t *testing.T) {
 	src, root := buildTree(t)
 	dest := openStore(t)
-	if se, re := runLoop(t, src, dest, root); se != nil || re != nil {
+	if _, se, re := runLoop(t, src, dest, root); se != nil || re != nil {
 		t.Fatalf("first sync: send=%v recv=%v", se, re)
 	}
-	if se, re := runLoop(t, src, dest, root); se != nil || re != nil {
+	if _, se, re := runLoop(t, src, dest, root); se != nil || re != nil {
 		t.Fatalf("second sync: send=%v recv=%v", se, re)
 	}
 	if err := fstree.CheckComplete(root, dest.Get, dest.Has, 0); err != nil {
@@ -84,7 +84,7 @@ func TestLoopResumesPartialTransfer(t *testing.T) {
 	if err := dest.Put(root, rootBytes); err != nil {
 		t.Fatal(err)
 	}
-	if se, re := runLoop(t, src, dest, root); se != nil || re != nil {
+	if _, se, re := runLoop(t, src, dest, root); se != nil || re != nil {
 		t.Fatalf("send=%v recv=%v", se, re)
 	}
 	if err := fstree.CheckComplete(root, dest.Get, dest.Has, 0); err != nil {
@@ -152,7 +152,46 @@ func receiveFromEmptyPackSender(t *testing.T, dest *packstore.Store, root key.Ke
 			}
 		}
 	}()
-	return Receive(b, dest, root, 0)
+	_, err := Receive(b, dest, root, 0)
+	return err
+}
+
+// TestReceiveStats checks the transfer accounting a fresh sync and an
+// idempotent re-sync report: a fresh sync requests and receives exactly
+// the tree's objects and counts wire bytes; a re-sync moves nothing and
+// ends after the single empty want round.
+func TestReceiveStats(t *testing.T) {
+	src, root := buildTree(t)
+	dest := openStore(t)
+	total, err := fstree.ReachableKeys(root, src.Get)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stats, se, re := runLoop(t, src, dest, root)
+	if se != nil || re != nil {
+		t.Fatalf("send=%v recv=%v", se, re)
+	}
+	if stats.Received != len(total) || stats.Requested != len(total) {
+		t.Fatalf("fresh sync: requested=%d received=%d, want both %d", stats.Requested, stats.Received, len(total))
+	}
+	if stats.Bytes == 0 {
+		t.Fatal("fresh sync must count wire bytes")
+	}
+	if stats.Rounds < 2 {
+		t.Fatalf("fresh sync of a multi-level tree took %d rounds", stats.Rounds)
+	}
+
+	stats, se, re = runLoop(t, src, dest, root)
+	if se != nil || re != nil {
+		t.Fatalf("re-sync: send=%v recv=%v", se, re)
+	}
+	if stats.Received != 0 || stats.Requested != 0 || stats.Bytes != 0 {
+		t.Fatalf("re-sync must transfer nothing: %+v", stats)
+	}
+	if stats.Rounds != 1 {
+		t.Fatalf("re-sync must end after the empty round, took %d", stats.Rounds)
+	}
 }
 
 // TestLoopSenderMissingObject syncs from a sender that lacks the tree:
@@ -162,7 +201,7 @@ func TestLoopSenderMissingObject(t *testing.T) {
 	_, root := buildTree(t)
 	emptySrc := openStore(t)
 	dest := openStore(t)
-	sendErr, recvErr := runLoop(t, emptySrc, dest, root)
+	_, sendErr, recvErr := runLoop(t, emptySrc, dest, root)
 	if !errors.Is(sendErr, packstore.ErrNotFound) {
 		t.Fatalf("sender error: %v", sendErr)
 	}

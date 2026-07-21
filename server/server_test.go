@@ -1,11 +1,15 @@
 package server
 
 import (
+	"bytes"
 	"errors"
+	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,6 +25,12 @@ import (
 
 func testServer(t *testing.T) *Server {
 	t.Helper()
+	return testServerTo(t, os.Stderr)
+}
+
+// testServerTo builds a Server whose log lands on w.
+func testServerTo(t *testing.T, w io.Writer) *Server {
+	t.Helper()
 	dir := t.TempDir()
 	objects, err := packstore.Open(filepath.Join(dir, "packstore"), packstore.WithSync(true))
 	if err != nil {
@@ -31,7 +41,7 @@ func testServer(t *testing.T) *Server {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { refs.Close(); objects.Close() })
-	return New(slog.New(slog.NewTextHandler(os.Stderr, nil)), objects, refs)
+	return New(slog.New(slog.NewTextHandler(w, nil)), objects, refs)
 }
 
 func clientStore(t *testing.T) (*packstore.Store, key.Key) {
@@ -64,7 +74,7 @@ func doPush(t *testing.T, srv *Server, st *packstore.Store, name string, root ke
 	t.Helper()
 	c, s := net.Pipe()
 	done := make(chan struct{})
-	go func() { defer close(done); srv.HandleStream(s) }()
+	go func() { defer close(done); srv.HandleStream("test-client", s) }()
 	defer func() { c.Close(); <-done }()
 	req := protocol.Msg{Type: protocol.TPush, Name: name, Root: root[:], CAS: cas, ExpectedOld: expectedOld}
 	if err := protocol.WriteMsg(c, req); err != nil {
@@ -160,7 +170,7 @@ func TestPushTransferFailureReportsErr(t *testing.T) {
 	_, root := clientStore(t)
 	c, s := net.Pipe()
 	done := make(chan struct{})
-	go func() { defer close(done); srv.HandleStream(s) }()
+	go func() { defer close(done); srv.HandleStream("test-client", s) }()
 	defer func() { c.Close(); <-done }()
 	if err := protocol.WriteMsg(c, protocol.Msg{Type: protocol.TPush, Name: "r", Root: root[:]}); err != nil {
 		t.Fatal(err)
@@ -189,7 +199,7 @@ func TestPushDoesNotEchoPeerError(t *testing.T) {
 	_, root := clientStore(t)
 	c, s := net.Pipe()
 	done := make(chan struct{})
-	go func() { defer close(done); srv.HandleStream(s) }()
+	go func() { defer close(done); srv.HandleStream("test-client", s) }()
 	defer func() { c.Close(); <-done }()
 	if err := protocol.WriteMsg(c, protocol.Msg{Type: protocol.TPush, Name: "r", Root: root[:]}); err != nil {
 		t.Fatal(err)
@@ -216,7 +226,7 @@ func TestPullBadWantsReportsErr(t *testing.T) {
 	}
 	c, s := net.Pipe()
 	done := make(chan struct{})
-	go func() { defer close(done); srv.HandleStream(s) }()
+	go func() { defer close(done); srv.HandleStream("test-client", s) }()
 	defer func() { c.Close(); <-done }()
 	if err := protocol.WriteMsg(c, protocol.Msg{Type: protocol.TPull, Name: "r"}); err != nil {
 		t.Fatal(err)
@@ -240,7 +250,7 @@ func TestPullUnknownRef(t *testing.T) {
 	srv := testServer(t)
 	c, s := net.Pipe()
 	done := make(chan struct{})
-	go func() { defer close(done); srv.HandleStream(s) }()
+	go func() { defer close(done); srv.HandleStream("test-client", s) }()
 	defer func() { c.Close(); <-done }()
 	if err := protocol.WriteMsg(c, protocol.Msg{Type: protocol.TPull, Name: "nope"}); err != nil {
 		t.Fatal(err)
@@ -268,7 +278,7 @@ func TestPullTransfersTree(t *testing.T) {
 
 	c, s := net.Pipe()
 	done := make(chan struct{})
-	go func() { defer close(done); srv.HandleStream(s) }()
+	go func() { defer close(done); srv.HandleStream("test-client", s) }()
 	defer func() { c.Close(); <-done }()
 	if err := protocol.WriteMsg(c, protocol.Msg{Type: protocol.TPull, Name: "r"}); err != nil {
 		t.Fatal(err)
@@ -285,7 +295,7 @@ func TestPullTransfersTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := wantsync.Receive(c, dest, k, 0); err != nil {
+	if _, err := wantsync.Receive(c, dest, k, 0); err != nil {
 		t.Fatal(err)
 	}
 	if err := fstree.CheckComplete(k, dest.Get, dest.Has, 0); err != nil {
@@ -301,7 +311,7 @@ func TestRefList(t *testing.T) {
 	}
 	c, s := net.Pipe()
 	done := make(chan struct{})
-	go func() { defer close(done); srv.HandleStream(s) }()
+	go func() { defer close(done); srv.HandleStream("test-client", s) }()
 	defer func() { c.Close(); <-done }()
 	if err := protocol.WriteMsg(c, protocol.Msg{Type: protocol.TRefList}); err != nil {
 		t.Fatal(err)
@@ -318,11 +328,60 @@ func TestRefList(t *testing.T) {
 	}
 }
 
+// TestPushLogsTransferStats asserts the per-push server log: offered is
+// the full tree size, transferred is what crossed the wire — equal on a
+// fresh push, zero transferred on an idempotent re-push.
+func TestPushLogsTransferStats(t *testing.T) {
+	var buf bytes.Buffer
+	srv := testServerTo(t, &buf)
+	st, root := clientStore(t)
+	total, err := fstree.ReachableKeys(root, st.Get)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if m, err := doPush(t, srv, st, "logged/ref", root, true, nil); err != nil || m.Type != protocol.TOK {
+		t.Fatalf("push: %+v %v", m, err)
+	}
+	out := buf.String()
+	for _, want := range []string{
+		"msg=push",
+		"ref=logged/ref",
+		"client=test-client",
+		fmt.Sprintf("offered=%d", len(total)),
+		fmt.Sprintf("transferred=%d", len(total)),
+		"throughput=",
+		"duration=",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("push log missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "bytes=0 ") {
+		t.Fatalf("fresh push must log nonzero bytes:\n%s", out)
+	}
+
+	buf.Reset()
+	if m, err := doPush(t, srv, st, "logged/ref", root, false, nil); err != nil || m.Type != protocol.TOK {
+		t.Fatalf("re-push: %+v %v", m, err)
+	}
+	out = buf.String()
+	for _, want := range []string{
+		fmt.Sprintf("offered=%d", len(total)),
+		"transferred=0",
+		"bytes=0",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("re-push log missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestUnknownOperation(t *testing.T) {
 	srv := testServer(t)
 	c, s := net.Pipe()
 	done := make(chan struct{})
-	go func() { defer close(done); srv.HandleStream(s) }()
+	go func() { defer close(done); srv.HandleStream("test-client", s) }()
 	defer func() { c.Close(); <-done }()
 	if err := protocol.WriteMsg(c, protocol.Msg{Type: 99}); err != nil {
 		t.Fatal(err)

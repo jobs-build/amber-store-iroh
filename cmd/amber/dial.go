@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/netip"
+	"strconv"
 	"time"
 
 	"github.com/fables-for-robots/amber-store-iroh/protocol"
@@ -26,7 +28,7 @@ func serverFlags(server *string, addrs *cli.StringSlice) []cli.Flag {
 		},
 		&cli.StringSliceFlag{
 			Name:        "addr",
-			Usage:       "direct server address host:port (repeatable; skips discovery and relays)",
+			Usage:       "direct server address host:port or ip:port (repeatable; skips discovery and relays)",
 			Destination: addrs,
 		},
 	}
@@ -36,6 +38,35 @@ func serverFlags(server *string, addrs *cli.StringSlice) []cli.Flag {
 // server-side value of ref name on the given server.
 func trackingRef(serverID string, name string) string {
 	return trackingPrefix + serverID + "/" + name
+}
+
+// parseDirectAddrs turns --addr values into socket addresses. Each value
+// is host:port where host is an IP literal or a hostname; hostnames may
+// resolve to several addresses and all of them become dial candidates.
+func parseDirectAddrs(ctx context.Context, addrs []string) ([]netip.AddrPort, error) {
+	var out []netip.AddrPort
+	for _, s := range addrs {
+		if ap, err := netip.ParseAddrPort(s); err == nil {
+			out = append(out, ap)
+			continue
+		}
+		host, portStr, err := net.SplitHostPort(s)
+		if err != nil {
+			return nil, fmt.Errorf("parse --addr %q: %w", s, err)
+		}
+		port, err := strconv.ParseUint(portStr, 10, 16)
+		if err != nil {
+			return nil, fmt.Errorf("parse --addr %q: bad port: %w", s, err)
+		}
+		ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+		if err != nil {
+			return nil, fmt.Errorf("resolve --addr host %q: %w", host, err)
+		}
+		for _, ip := range ips {
+			out = append(out, netip.AddrPortFrom(ip.Unmap(), uint16(port)))
+		}
+	}
+	return out, nil
 }
 
 // dialServer connects to the server with an ephemeral client identity
@@ -50,17 +81,16 @@ func dialServer(ctx context.Context, serverID string, directAddrs []string) (*ir
 	}
 
 	if len(directAddrs) > 0 {
+		aps, err := parseDirectAddrs(ctx, directAddrs)
+		if err != nil {
+			return nil, nil, err
+		}
 		ep, err := iroh.Bind(ctx)
 		if err != nil {
 			return nil, nil, fmt.Errorf("bind: %w", err)
 		}
 		addr := netaddr.NewEndpointAddr(id)
-		for _, s := range directAddrs {
-			ap, err := netip.ParseAddrPort(s)
-			if err != nil {
-				ep.Shutdown(ctx)
-				return nil, nil, fmt.Errorf("parse --addr %q: %w", s, err)
-			}
+		for _, ap := range aps {
 			addr = addr.WithIP(ap)
 		}
 		conn, err := ep.Connect(ctx, addr, protocol.ALPN)

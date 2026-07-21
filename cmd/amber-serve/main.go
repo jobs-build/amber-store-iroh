@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -100,6 +100,10 @@ func main() {
 				Name:  "relay",
 				Usage: "relay server URL to use as the fallback path (default: nearest of the built-in relays)",
 			},
+			&cli.StringSliceFlag{
+				Name:  "advertise-addr",
+				Usage: "direct address to advertise, ip or ip:port (repeatable; replaces interface auto-detection)",
+			},
 		},
 		Action: func(c *cli.Context) error {
 			dir := c.String("store")
@@ -147,14 +151,23 @@ func main() {
 
 			// The default wildcard bind address is not a dialable
 			// candidate and is dropped from published records, which
-			// would leave clients relay-only. Advertise the machine's
-			// real interface addresses on the bound port so peers can
-			// dial direct.
-			ifaceAddrs, err := net.InterfaceAddrs()
-			if err != nil {
-				return fmt.Errorf("interface addresses: %w", err)
+			// would leave clients relay-only. Advertise real reachable
+			// addresses so peers can dial direct: the operator's
+			// --advertise-addr list verbatim, or else the machine's
+			// interface addresses on the bound port.
+			var direct []netip.AddrPort
+			if vals := c.StringSlice("advertise-addr"); len(vals) > 0 {
+				direct, err = parseAdvertiseAddrs(vals, ep.LocalAddr().Port())
+				if err != nil {
+					return err
+				}
+			} else {
+				ifaces, err := localIfaceAddrs()
+				if err != nil {
+					return fmt.Errorf("interface addresses: %w", err)
+				}
+				direct = advertisedAddrPorts(ifaces, ep.LocalAddr().Port())
 			}
-			direct := directAddrPorts(ifaceAddrs, ep.LocalAddr().Port())
 			advertised := ep.Addr()
 			directTransport := make([]netaddr.TransportAddr, 0, len(direct))
 			for _, ap := range direct {

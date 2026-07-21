@@ -95,6 +95,30 @@ func decodeKeys(bs [][]byte) ([]key.Key, error) {
 	return out, nil
 }
 
+// Progress observes a transfer as it happens. Requested grows the known
+// work set when a want round is exchanged; its bytes come from the keys'
+// embedded lengths, which are logical sizes (subtree footprints for
+// directory types), so they bound the payload bytes from above rather
+// than equal them. Transferred records objects that actually moved, with
+// exact payload bytes. Callbacks arrive from the transfer goroutines;
+// implementations must be safe for concurrent use. A nil Progress is
+// legal and ignored.
+type Progress interface {
+	Requested(objects int, bytes int64)
+	Transferred(objects int, bytes int64)
+}
+
+// keyBytes sums the logical lengths embedded in keys — an upper bound
+// on the uncompressed bytes of transferring those objects and, for
+// aggregate types, everything below them.
+func keyBytes(keys []key.Key) int64 {
+	var n int64
+	for _, k := range keys {
+		n += int64(k.Length())
+	}
+	return n
+}
+
 // Stats summarizes one Receive run for transfer accounting.
 type Stats struct {
 	Rounds    int   // want rounds sent, including the final empty one
@@ -119,7 +143,7 @@ func (c *countingReader) Read(p []byte) (int, error) {
 // TWants → amberpack until nothing below root is missing. The final,
 // empty TWants tells the sender the loop is over. Received objects are
 // verified against their keys before being stored — the peer is untrusted.
-func Receive(rw io.ReadWriter, st *packstore.Store, root key.Key, jobs int) (Stats, error) {
+func Receive(rw io.ReadWriter, st *packstore.Store, root key.Key, jobs int, prog Progress) (Stats, error) {
 	var stats Stats
 	cr := &countingReader{r: rw}
 	frontier := []key.Key{root}
@@ -134,6 +158,9 @@ func Receive(rw io.ReadWriter, st *packstore.Store, root key.Key, jobs int) (Sta
 		}
 		stats.Rounds++
 		stats.Requested += len(wants)
+		if prog != nil && len(wants) > 0 {
+			prog.Requested(len(wants), keyBytes(wants))
+		}
 		if len(wants) == 0 {
 			stats.Bytes = cr.n
 			return stats, nil
@@ -156,6 +183,9 @@ func Receive(rw io.ReadWriter, st *packstore.Store, root key.Key, jobs int) (Sta
 				}
 				received[o.Key] = true
 				next = append(next, kids...)
+				if prog != nil {
+					prog.Transferred(1, int64(len(o.Bytes)))
+				}
 				if !yield(packstore.Object{Key: o.Key, Data: o.Bytes}, nil) {
 					return
 				}
@@ -216,7 +246,7 @@ func checkDelivered(received map[key.Key]bool, wants []key.Key) error {
 // Send runs the sending half: answer each TWants round with a pack of
 // exactly the requested objects, until an empty TWants ends the loop. A
 // local read failure is reported to the peer as a TErr frame and returned.
-func Send(rw io.ReadWriter, st *packstore.Store) error {
+func Send(rw io.ReadWriter, st *packstore.Store, prog Progress) error {
 	for {
 		m, err := protocol.ReadMsg(rw)
 		if err != nil {
@@ -237,6 +267,9 @@ func Send(rw io.ReadWriter, st *packstore.Store) error {
 			return err
 		}
 		keys = dedupeKeys(keys)
+		if prog != nil {
+			prog.Requested(len(keys), keyBytes(keys))
+		}
 		st.SortByLocation(keys)
 		seq := func(yield func(fstree.Object, error) bool) {
 			for _, k := range keys {
@@ -244,6 +277,9 @@ func Send(rw io.ReadWriter, st *packstore.Store) error {
 				if err != nil {
 					yield(fstree.Object{}, fmt.Errorf("object %s: %w", k, err))
 					return
+				}
+				if prog != nil {
+					prog.Transferred(1, int64(len(data)))
 				}
 				if !yield(fstree.Object{Key: k, Bytes: data}, nil) {
 					return

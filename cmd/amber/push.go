@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fables-for-robots/amber-store-core/key"
@@ -17,16 +20,22 @@ import (
 
 func pushCommand() *cli.Command {
 	var (
-		server   string
-		addrs    cli.StringSlice
-		relayURL string
-		force    bool
+		server     string
+		addrs      cli.StringSlice
+		relayURL   string
+		force      bool
+		noProgress bool
 	)
 	flags := append(serverFlags(&server, &addrs, &relayURL),
 		&cli.BoolFlag{
 			Name:        "force",
 			Usage:       "overwrite the remote ref even if it changed since the last pull/push",
 			Destination: &force,
+		},
+		&cli.BoolFlag{
+			Name:        "no-progress",
+			Usage:       "disable the progress bar",
+			Destination: &noProgress,
 		},
 	)
 	return &cli.Command{
@@ -38,12 +47,12 @@ func pushCommand() *cli.Command {
 			if c.NArg() != 1 {
 				return fmt.Errorf("push requires exactly one NAME argument, got %d", c.NArg())
 			}
-			return runPush(c, server, addrs.Value(), relayURL, force, c.Args().First())
+			return runPush(c, server, addrs.Value(), relayURL, force, noProgress, c.Args().First())
 		},
 	}
 }
 
-func runPush(c *cli.Context, server string, addrs []string, relayURL string, force bool, name string) error {
+func runPush(c *cli.Context, server string, addrs []string, relayURL string, force bool, noProgress bool, name string) error {
 	if strings.HasPrefix(name, trackingPrefix) {
 		return fmt.Errorf("ref %q: the %q namespace is reserved for remote-tracking refs", name, trackingPrefix)
 	}
@@ -83,15 +92,32 @@ func runPush(c *cli.Context, server string, addrs []string, relayURL string, for
 		return fmt.Errorf("open stream: %w", err)
 	}
 
+	// The root key's logical length is the tree's whole footprint — the
+	// transfer's upper bound, known before the first round. LIFO: cancel
+	// stops the render goroutine, then the Wait drains it, so every
+	// return path tears the bar down before printing.
+	var xfer *XferProgress
+	var pwg sync.WaitGroup
+	start := time.Now()
+	pctx, pcancel := context.WithCancel(c.Context)
+	defer pwg.Wait()
+	defer pcancel()
+	if !noProgress {
+		xfer = NewXferProgress("push", int64(root.Length()))
+		isTTY := isTerminal(os.Stderr)
+		pwg.Go(func() { xfer.Run(pctx, os.Stderr, start, isTTY) })
+	}
+
 	// A QUIC stream is invisible to the server until data flows, so the
 	// request goes out before any read.
 	req := protocol.Msg{Type: protocol.TPush, Name: name, Root: root[:], CAS: !force, ExpectedOld: expectedOld}
 	if err := protocol.WriteMsg(stream, req); err != nil {
 		return err
 	}
-	if err := wantsync.Send(stream, objects); err != nil {
+	if err := wantsync.Send(stream, objects, xfer); err != nil {
 		return pushError(name, err)
 	}
+	xfer.Finish()
 	m, err := protocol.ReadMsg(stream)
 	if err != nil {
 		return err
@@ -115,6 +141,14 @@ func runPush(c *cli.Context, server string, addrs []string, relayURL string, for
 	}
 	if err := refs.Put(tname, raw); err != nil {
 		return fmt.Errorf("push succeeded but recording tracking ref failed: %w", err)
+	}
+
+	// Tear down the bar before printing, so the summary and result are
+	// not repainted over.
+	pcancel()
+	pwg.Wait()
+	if xfer != nil {
+		fmt.Fprintln(os.Stderr, xfer.summary(time.Since(start)))
 	}
 	fmt.Fprintf(c.App.Writer, "%s -> %s\n", name, root)
 	return nil

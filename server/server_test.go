@@ -80,7 +80,7 @@ func doPush(t *testing.T, srv *Server, st *packstore.Store, name string, root ke
 	if err := protocol.WriteMsg(c, req); err != nil {
 		return protocol.Msg{}, err
 	}
-	if err := wantsync.Send(c, st); err != nil {
+	if err := wantsync.Send(c, st, nil); err != nil {
 		return protocol.Msg{}, err
 	}
 	return protocol.ReadMsg(c)
@@ -295,7 +295,7 @@ func TestPullTransfersTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := wantsync.Receive(c, dest, k, 0); err != nil {
+	if _, err := wantsync.Receive(c, dest, k, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := fstree.CheckComplete(k, dest.Get, dest.Has, 0); err != nil {

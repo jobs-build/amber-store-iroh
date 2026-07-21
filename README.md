@@ -23,7 +23,7 @@ The identity key is generated on first run (hex, `server.key`, gitignored).
 ```sh
 amber --store ./st import --ref snap ./some/dir    # ingest; prints root key
 amber --store ./st push --server ENDPOINT_ID snap  # CAS; --force to override
-amber --store ./st pull --server ENDPOINT_ID snap
+amber --store ./st pull --server ENDPOINT_ID snap  # both show a progress bar (--no-progress to disable)
 amber refs --server ENDPOINT_ID                    # list remote refs
 amber --store ./st ls ref:snap                     # local commands work offline
 amber --store ./st restore ref:snap ./dest

@@ -88,7 +88,7 @@ func TestE2EPushPullRestoreRoundTrip(t *testing.T) {
 	}
 	root := strings.TrimSpace(out)
 
-	args := append([]string{"--store", storeA, "push"}, netArgs(id, addrArgs, "snap")...)
+	args := append([]string{"--store", storeA, "push", "--no-progress"}, netArgs(id, addrArgs, "snap")...)
 	if out, err := runApp(t, args...); err != nil {
 		t.Fatalf("push: %v (%s)", err, out)
 	}
@@ -104,7 +104,7 @@ func TestE2EPushPullRestoreRoundTrip(t *testing.T) {
 	}
 
 	// Pull into a fresh store and restore.
-	args = append([]string{"--store", storeB, "pull"}, netArgs(id, addrArgs, "snap")...)
+	args = append([]string{"--store", storeB, "pull", "--no-progress"}, netArgs(id, addrArgs, "snap")...)
 	if out, err := runApp(t, args...); err != nil {
 		t.Fatalf("pull: %v (%s)", err, out)
 	}
@@ -143,7 +143,7 @@ func TestE2ECASConflictAndForce(t *testing.T) {
 	if _, err := runApp(t, "--store", storeA, "import", "--no-progress", "--ref", "snap", srcA); err != nil {
 		t.Fatal(err)
 	}
-	args := append([]string{"--store", storeA, "push"}, netArgs(id, addrArgs, "snap")...)
+	args := append([]string{"--store", storeA, "push", "--no-progress"}, netArgs(id, addrArgs, "snap")...)
 	if _, err := runApp(t, args...); err != nil {
 		t.Fatalf("initial push: %v", err)
 	}
@@ -152,34 +152,34 @@ func TestE2ECASConflictAndForce(t *testing.T) {
 	if _, err := runApp(t, "--store", storeB, "import", "--no-progress", "--ref", "snap", srcB); err != nil {
 		t.Fatal(err)
 	}
-	args = append([]string{"--store", storeB, "push"}, netArgs(id, addrArgs, "snap")...)
+	args = append([]string{"--store", storeB, "push", "--no-progress"}, netArgs(id, addrArgs, "snap")...)
 	_, err := runApp(t, args...)
 	if err == nil || !strings.Contains(err.Error(), "pull first") {
 		t.Fatalf("want cas-mismatch guidance, got %v", err)
 	}
 
 	// Idempotent re-push from A (tracking matches) still succeeds.
-	args = append([]string{"--store", storeA, "push"}, netArgs(id, addrArgs, "snap")...)
+	args = append([]string{"--store", storeA, "push", "--no-progress"}, netArgs(id, addrArgs, "snap")...)
 	if _, err := runApp(t, args...); err != nil {
 		t.Fatalf("idempotent re-push: %v", err)
 	}
 
 	// B forces, then A's next push must now fail CAS.
-	args = append([]string{"--store", storeB, "push", "--force"}, netArgs(id, addrArgs, "snap")...)
+	args = append([]string{"--store", storeB, "push", "--force", "--no-progress"}, netArgs(id, addrArgs, "snap")...)
 	if _, err := runApp(t, args...); err != nil {
 		t.Fatalf("forced push: %v", err)
 	}
-	args = append([]string{"--store", storeA, "push"}, netArgs(id, addrArgs, "snap")...)
+	args = append([]string{"--store", storeA, "push", "--no-progress"}, netArgs(id, addrArgs, "snap")...)
 	if _, err := runApp(t, args...); err == nil {
 		t.Fatal("A's push after B's force must fail CAS")
 	}
 
 	// A pulls (adopting B's tree), then pushes cleanly.
-	args = append([]string{"--store", storeA, "pull"}, netArgs(id, addrArgs, "snap")...)
+	args = append([]string{"--store", storeA, "pull", "--no-progress"}, netArgs(id, addrArgs, "snap")...)
 	if _, err := runApp(t, args...); err != nil {
 		t.Fatalf("pull after conflict: %v", err)
 	}
-	args = append([]string{"--store", storeA, "push"}, netArgs(id, addrArgs, "snap")...)
+	args = append([]string{"--store", storeA, "push", "--no-progress"}, netArgs(id, addrArgs, "snap")...)
 	if _, err := runApp(t, args...); err != nil {
 		t.Fatalf("push after pull: %v", err)
 	}
@@ -407,7 +407,7 @@ func TestE2EPushPullRefuseTrackingNamespace(t *testing.T) {
 func TestE2EPullUnknownRef(t *testing.T) {
 	id, addrArgs := startServer(t)
 	store := t.TempDir()
-	args := append([]string{"--store", store, "pull"}, netArgs(id, addrArgs, "nope")...)
+	args := append([]string{"--store", store, "pull", "--no-progress"}, netArgs(id, addrArgs, "nope")...)
 	_, err := runApp(t, args...)
 	if err == nil || !strings.Contains(err.Error(), protocol.CodeUnknownRef) {
 		t.Fatalf("want unknown-ref, got %v", err)

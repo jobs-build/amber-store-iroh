@@ -29,8 +29,16 @@ amber --store ./st ls ref:snap                     # local commands work offline
 amber --store ./st restore ref:snap ./dest
 ```
 
-`--addr host:port` (repeatable) dials the server directly, skipping
-discovery and relays — useful on a LAN and used by the offline e2e tests.
+`--addr host:port` (repeatable, hostnames allowed) dials the server
+directly, skipping discovery and relays — useful on a LAN and used by the
+offline e2e tests. Without it, clients resolve the server via mDNS on the
+local link first, then pkarr/DNS; the server advertises its interface
+addresses both ways, so same-LAN transfers go direct rather than through
+a relay. `--relay URL` pins the fallback relay on either side.
+
+Throughput note: the current go-iroh transport tops out around 16 MB/s
+per connection even on loopback (parallel streams do not lift it); direct
+paths hit that ceiling, relayed paths are far slower.
 
 ## Development
 

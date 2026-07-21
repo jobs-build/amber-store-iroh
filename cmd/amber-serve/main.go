@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -18,15 +19,39 @@ import (
 	"github.com/fables-for-robots/amber-store-core/packstore"
 	"github.com/fables-for-robots/amber-store-core/refstore"
 	"github.com/fables-for-robots/amber-store-iroh/protocol"
+	"github.com/fables-for-robots/amber-store-iroh/relaymode"
 	"github.com/fables-for-robots/amber-store-iroh/server"
 	"github.com/tmc/go-iroh/dns"
 	"github.com/tmc/go-iroh/iroh"
+	"github.com/tmc/go-iroh/iroh/mdns"
 	irohkey "github.com/tmc/go-iroh/key"
+	"github.com/tmc/go-iroh/netaddr"
 	"github.com/tmc/go-iroh/relay"
 	"github.com/urfave/cli/v2"
 )
 
 const shutdownGrace = 10 * time.Second
+
+// serverRelayMode picks the relay fallback: an explicit --relay URL wins;
+// otherwise the built-in map is reordered to prefer the lowest-latency
+// relay (the stock selection can land on a far-away region). Probing is
+// bounded and best-effort — on failure the default map is used as-is.
+func serverRelayMode(ctx context.Context, flag string, log *slog.Logger) (relay.Mode, error) {
+	if flag != "" {
+		return relaymode.FromFlag(flag)
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	m, err := relay.DefaultMap().PreferNearest(probeCtx, relay.HTTPConnectProber(nil))
+	if err != nil {
+		log.Warn("relay latency probe failed; using default relay map", "error", err)
+		return relay.ModeDefault(), nil
+	}
+	if urls := m.URLs(); len(urls) > 0 {
+		log.Info("preferred relay", "url", urls[0])
+	}
+	return relay.ModeCustom(m), nil
+}
 
 // loadOrCreateSecretKey reads the hex-encoded secret key from path,
 // generating and persisting a fresh one on first run. Deleting the file
@@ -71,6 +96,10 @@ func main() {
 				Value: "server.key",
 				Usage: "path to the secret key file (generated on first run)",
 			},
+			&cli.StringFlag{
+				Name:  "relay",
+				Usage: "relay server URL to use as the fallback path (default: nearest of the built-in relays)",
+			},
 		},
 		Action: func(c *cli.Context) error {
 			dir := c.String("store")
@@ -96,11 +125,16 @@ func main() {
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
 
+			relayMode, err := serverRelayMode(ctx, c.String("relay"), log)
+			if err != nil {
+				return err
+			}
+
 			ep, err := iroh.Bind(
 				ctx,
 				iroh.WithSecretKey(sk),
 				iroh.WithALPNs(protocol.ALPN),
-				iroh.WithRelayMode(relay.ModeDefault()),
+				iroh.WithRelayMode(relayMode),
 			)
 			if err != nil {
 				return fmt.Errorf("bind: %w", err)
@@ -111,18 +145,51 @@ func main() {
 				return fmt.Errorf("connect to relay: %w", err)
 			}
 
-			// Publish the relay address so clients can resolve the
-			// endpoint ID over the internet; re-published in the
-			// background every 5 minutes.
-			pub, err := iroh.N0PkarrPublisher(sk, nil)
+			// The default wildcard bind address is not a dialable
+			// candidate and is dropped from published records, which
+			// would leave clients relay-only. Advertise the machine's
+			// real interface addresses on the bound port so peers can
+			// dial direct.
+			ifaceAddrs, err := net.InterfaceAddrs()
+			if err != nil {
+				return fmt.Errorf("interface addresses: %w", err)
+			}
+			direct := directAddrPorts(ifaceAddrs, ep.LocalAddr().Port())
+			advertised := ep.Addr()
+			directTransport := make([]netaddr.TransportAddr, 0, len(direct))
+			for _, ap := range direct {
+				ep.AddExternalAddr(ap)
+				advertised = advertised.WithIP(ap)
+				directTransport = append(directTransport, netaddr.IPAddr{Addr: ap})
+			}
+
+			// Advertise the direct addresses on the local link too, so
+			// same-LAN clients resolve them over mDNS even when pkarr
+			// is stale or unreachable. Start is the listen loop itself,
+			// not a launcher — it blocks until ctx ends, so it gets its
+			// own goroutine; Publish is safe before Start.
+			disc := mdns.New(ep.ID())
+			disc.Publish(dns.NewEndpointData(directTransport...))
+			go func() {
+				if err := disc.Start(ctx); err != nil && ctx.Err() == nil {
+					log.Warn("mdns listener stopped", "error", err)
+				}
+			}()
+
+			// Publish the relay and direct addresses so clients can
+			// resolve the endpoint ID over the internet; re-published
+			// in the background every 5 minutes.
+			pub, err := iroh.N0PkarrPublisher(sk, &iroh.PkarrPublisherConfig{
+				AddrFilter: publishableAddrs,
+			})
 			if err != nil {
 				return fmt.Errorf("pkarr publisher: %w", err)
 			}
 			defer pub.Close()
-			pub.Publish(dns.NewEndpointData(ep.Addr().Addrs()...))
+			pub.Publish(dns.NewEndpointData(advertised.Addrs()...))
 
 			log.Info("server started", "id", ep.ID())
-			log.Info("server listening", "addr", ep.Addr())
+			log.Info("server listening", "addr", advertised)
 
 			srv := server.New(log, objects, refs)
 			err = srv.Serve(ctx, ep, shutdownGrace)

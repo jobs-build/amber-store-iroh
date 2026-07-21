@@ -11,25 +11,26 @@ import (
 
 func refsCommand() *cli.Command {
 	var (
-		server string
-		addrs  cli.StringSlice
+		server   string
+		addrs    cli.StringSlice
+		relayURL string
 	)
 	return &cli.Command{
 		Name:  "refs",
 		Usage: "list the references on the server: name, key, creation time, creator",
-		Flags: serverFlags(&server, &addrs),
+		Flags: serverFlags(&server, &addrs, &relayURL),
 		Action: func(c *cli.Context) error {
 			if c.NArg() != 0 {
 				return fmt.Errorf("refs takes no arguments, got %d", c.NArg())
 			}
-			return runRefs(c, server, addrs.Value())
+			return runRefs(c, server, addrs.Value(), relayURL)
 		},
 	}
 }
 
 // runRefs lists remote refs; it needs no local store.
-func runRefs(c *cli.Context, server string, addrs []string) error {
-	conn, closeConn, err := dialServer(c.Context, server, addrs)
+func runRefs(c *cli.Context, server string, addrs []string, relayURL string) error {
+	conn, closeConn, err := dialServer(c.Context, server, addrs, relayURL)
 	if err != nil {
 		return err
 	}

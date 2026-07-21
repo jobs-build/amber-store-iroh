@@ -53,8 +53,13 @@ cmd/amber-serve        cmd/amber (client)
   `server.key`, generated on first run — same pattern as irohese). Deleting
   the file changes the server's endpoint ID.
 - Binds an iroh endpoint with ALPN `amber-store-iroh/1`, relays enabled
-  (`relay.ModeDefault()`), publishes its address to n0's pkarr relay, and
-  logs its endpoint ID on startup.
+  (nearest built-in relay preferred via a bounded latency probe; `--relay
+  URL` overrides), and logs its endpoint ID on startup.
+- Advertises the machine's unicast interface addresses on the bound port
+  (wildcard, loopback, and link-local excluded) so peers can dial direct:
+  published to n0's pkarr relay with a filter that keeps direct addresses
+  (the library default strips them), and advertised on the local link over
+  mDNS for same-LAN clients.
 - One goroutine per connection; one operation per accepted stream. No actor
   system (irohese's goakt usage was an experiment there; it adds nothing
   here).
@@ -72,9 +77,11 @@ cmd/amber-serve        cmd/amber (client)
   offline: `import` (ingest), `ls`, `export`, `restore`, `ref
   list|get|set|rm` — mirroring the amber-store-core CLI.
 - Network commands (`push`, `pull`, `refs`) take `--server <endpoint-id>`,
-  resolve it via pkarr + DNS resolvers (as in irohese's client), and dial
-  with an **ephemeral** identity — access is open, so the client needs no
-  stable key file.
+  resolve it via mDNS (local link first, short timeout), then pkarr + DNS,
+  and dial with an **ephemeral** identity — access is open, so the client
+  needs no stable key file. `--addr host:port` (hostnames resolve;
+  repeatable) skips discovery and relays entirely; `--relay URL` pins the
+  fallback relay.
 
 ### Remote-tracking refs
 

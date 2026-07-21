@@ -39,7 +39,7 @@ cmd/amber-serve        cmd/amber (client)
       ├── sync ─────────────┤        (want-loop: server & client halves)
       │                     │
   amber-store-core: packstore, refstore, reference, fstree,
-                    ingest, amberpack, inbox, tarexport, tarextract
+                    ingest, amberpack, tarexport, tarextract
       │                     │
   go-iroh: endpoint bind, pkarr publish/resolve, QUIC streams
 ```
@@ -47,8 +47,7 @@ cmd/amber-serve        cmd/amber (client)
 ### `cmd/amber-serve`
 
 - Owns a store directory (`--store` / `$AMBER_STORE`), conventional layout:
-  `packstore/` for objects, `refs/` for the refstore, `inbox/` for durable
-  pack receiving. Store directories are single-owner; only the server
+  `packstore/` for objects, `refs/` for the refstore. Store directories are single-owner; only the server
   process opens this one.
 - Persists its iroh identity hex-encoded in a key file (`--key`, default
   `server.key`, generated on first run — same pattern as irohese). Deleting
@@ -67,9 +66,7 @@ cmd/amber-serve        cmd/amber (client)
 
 ### `cmd/amber` (client)
 
-- Owns its own local store directory in the same layout (no `inbox/`
-  needed — pulls drain packs straight into the packstore since the client
-  is a single process and rerunning a pull is cheap).
+- Owns its own local store directory in the same layout.
 - Local commands reuse amber-store-core packages directly and work
   offline: `import` (ingest), `ls`, `export`, `restore`, `ref
   list|get|set|rm` — mirroring the amber-store-core CLI.
@@ -134,12 +131,11 @@ Request `{op: "push", name, root, expectedOld?}`.
 3. Server sends `{wants: [key, ...]}`. If empty → done: server re-checks
    CAS under the per-name lock, commits the ref, replies `{ok, key}`.
 4. Client reads the wanted objects from its local store and streams them
-   as one amberpack payload. Server persists the pack durably via `inbox`,
-   drains it into the packstore, decodes the received tree objects, and
+   as one amberpack payload. Server verifies each received object against its key and writes it straight into the packstore (parallel verified writes; durability via synced writes), decodes the received tree objects, and
    their children become the next frontier. Loop to 3.
 
 Round trips are O(tree depth) ≈ O(log n); only missing objects cross the
-wire. Interrupted pushes are safe: received packs are durable and
+wire. Interrupted pushes are safe: received objects are fsynced and
 deduplicated, so rerunning resumes — previously transferred complete
 subtrees prune out.
 

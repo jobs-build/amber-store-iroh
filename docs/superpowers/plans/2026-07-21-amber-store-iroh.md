@@ -1601,6 +1601,9 @@ func (s *Server) Serve(ctx context.Context, ep *iroh.Endpoint, grace time.Durati
 				break
 			}
 			s.log.Error("accept", "error", err)
+			// Backoff so a persistent accept failure (e.g. fd
+			// exhaustion) cannot spin the loop.
+			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 		wg.Add(1)

@@ -30,12 +30,12 @@ func refsCommand() *cli.Command {
 
 // runRefs lists remote refs; it needs no local store.
 func runRefs(c *cli.Context, server string, addrs []string, relayURL string) error {
-	conn, closeConn, err := dialServer(c.Context, server, addrs, relayURL)
+	sc, err := dialServer(c.Context, server, addrs, relayURL)
 	if err != nil {
 		return err
 	}
-	defer closeConn()
-	stream, err := conn.OpenStreamConn(c.Context)
+	defer sc.Close()
+	stream, err := sc.conn.OpenStreamConn(c.Context)
 	if err != nil {
 		return fmt.Errorf("open stream: %w", err)
 	}

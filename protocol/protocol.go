@@ -37,6 +37,8 @@ const (
 	TDataEnd = 8  // sender→receiver: end of one pack payload
 	TOK      = 9  // server→client: push committed (Key)
 	TErr     = 10 // either direction: terminal failure (Code, Text, Current)
+	TAttach  = 11 // client→server: attach this stream to a transfer (Token)
+	TAccept  = 12 // server→client: sharded transfer accepted (Token)
 )
 
 // Error codes carried in TErr frames.
@@ -74,6 +76,9 @@ type Msg struct {
 	Code        string    `cbor:"10,keyasint,omitempty"`
 	Text        string    `cbor:"11,keyasint,omitempty"`
 	Current     []byte    `cbor:"12,keyasint,omitempty"` // cas-mismatch: the server's current key (nil = absent)
+	Token       []byte    `cbor:"13,keyasint,omitempty"` // transfer token for TAttach/TAccept (and TRef on sharded pulls)
+	DataConns   int       `cbor:"14,keyasint,omitempty"` // push/pull request: extra data connections the client will attach
+	DataPorts   []uint16  `cbor:"15,keyasint,omitempty"` // TAccept/TRef: server data-endpoint UDP ports for the extra connections
 }
 
 var (

@@ -48,9 +48,12 @@ Throughput notes:
 - On Linux, raise the kernel UDP buffers or QUIC throughput suffers and
   quic-go prints a receive-buffer warning:
   `sysctl -w net.core.rmem_max=8388608 net.core.wmem_max=8388608`
-- The current go-iroh transport tops out around 16 MB/s per connection
-  even on loopback (parallel streams do not lift it); direct paths hit
-  that ceiling, relayed paths are far slower.
+- The go-iroh transport tops out well below fast links per UDP socket
+  (~16 MB/s loopback; parallel streams on one connection do not help).
+  Transfers therefore shard across parallel connections on separate
+  sockets: `--conns N` on push/pull (default 4), paired with the
+  server's dedicated data endpoints (`--data-endpoints`, default 3).
+  Old peers interoperate — the transfer just stays single-connection.
 
 ## Development
 

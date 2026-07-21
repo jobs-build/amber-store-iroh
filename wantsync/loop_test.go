@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/fables-for-robots/amber-store-core/fstree"
 	"github.com/fables-for-robots/amber-store-core/key"
@@ -40,7 +41,7 @@ func runLoop(t *testing.T, src, dest *packstore.Store, root key.Key) (stats Stat
 			c.Close()
 		}
 	}()
-	stats, recvErr = Receive(b, dest, root, 0, nil)
+	stats, recvErr = Receive([]io.ReadWriter{b}, dest, root, 0, nil)
 	wg.Wait()
 	return stats, sendErr, recvErr
 }
@@ -152,7 +153,7 @@ func receiveFromEmptyPackSender(t *testing.T, dest *packstore.Store, root key.Ke
 			}
 		}
 	}()
-	_, err := Receive(b, dest, root, 0, nil)
+	_, err := Receive([]io.ReadWriter{b}, dest, root, 0, nil)
 	return err
 }
 
@@ -198,7 +199,7 @@ func TestLoopReportsProgress(t *testing.T) {
 		defer wg.Done()
 		sendErr = Send(a, src, &sendRec)
 	}()
-	_, recvErr := Receive(b, dest, root, 0, &recvRec)
+	_, recvErr := Receive([]io.ReadWriter{b}, dest, root, 0, &recvRec)
 	wg.Wait()
 	if sendErr != nil || recvErr != nil {
 		t.Fatalf("send=%v recv=%v", sendErr, recvErr)
@@ -272,5 +273,144 @@ func TestLoopSenderMissingObject(t *testing.T) {
 	var re *protocol.RemoteError
 	if !errors.As(recvErr, &re) || re.Code != protocol.CodeInternal {
 		t.Fatalf("receiver error: %v", recvErr)
+	}
+}
+
+// TestLoopShardedAcrossChannels deals each round's wants across three
+// channels, each served by an independent Send loop, and the destination
+// must still assemble the complete tree.
+func TestLoopShardedAcrossChannels(t *testing.T) {
+	src, root := buildTree(t)
+	dest := openStore(t)
+	total, err := fstree.ReachableKeys(root, src.Get)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const n = 3
+	senders := make([]duplex, n)
+	receivers := make([]io.ReadWriter, n)
+	for i := 0; i < n; i++ {
+		a, b := pipePair()
+		senders[i], receivers[i] = a, b
+	}
+	recs := make([]recordingProgress, n)
+	var wg sync.WaitGroup
+	sendErrs := make([]error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			sendErrs[i] = Send(senders[i], src, &recs[i])
+		}(i)
+	}
+	stats, recvErr := Receive(receivers, dest, root, 0, nil)
+	wg.Wait()
+	for i, err := range sendErrs {
+		if err != nil {
+			t.Fatalf("sender %d: %v", i, err)
+		}
+	}
+	if recvErr != nil {
+		t.Fatalf("receive: %v", recvErr)
+	}
+	if err := fstree.CheckComplete(root, dest.Get, dest.Has, 0); err != nil {
+		t.Fatalf("dest incomplete after sharded sync: %v", err)
+	}
+	if stats.Received != len(total) {
+		t.Fatalf("received %d objects, want %d", stats.Received, len(total))
+	}
+	var sumObjs int
+	channelsUsed := 0
+	for i := range recs {
+		sumObjs += recs[i].xferObjs
+		if recs[i].xferObjs > 0 {
+			channelsUsed++
+		}
+	}
+	if sumObjs != len(total) {
+		t.Fatalf("senders moved %d objects total, want %d", sumObjs, len(total))
+	}
+	if channelsUsed < 2 {
+		t.Fatalf("sharding must spread work: only %d of %d channels used", channelsUsed, n)
+	}
+}
+
+// TestLoopShardedSenderOmits pins the failure mode of the concurrent
+// merge: one of three channels answers its shard with an empty pack.
+// The loop must fail with the omission error — not hang and not commit.
+func TestLoopShardedSenderOmits(t *testing.T) {
+	src, root := buildTree(t)
+	dest := openStore(t)
+
+	const n = 3
+	senders := make([]duplex, n)
+	receivers := make([]io.ReadWriter, n)
+	for i := 0; i < n; i++ {
+		a, b := pipePair()
+		senders[i], receivers[i] = a, b
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if i != 1 {
+				_ = Send(senders[i], src, nil)
+				return
+			}
+			// Channel 1 answers every round with a well-formed but
+			// empty pack, then keeps listening.
+			for {
+				m, err := protocol.ReadMsg(senders[i])
+				if err != nil || m.Type != protocol.TWants || len(m.Keys) == 0 {
+					return
+				}
+				empty := func(yield func(fstree.Object, error) bool) {}
+				if err := protocol.SendPack(senders[i], empty); err != nil {
+					return
+				}
+			}
+		}(i)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := Receive(receivers, dest, root, 0, nil)
+		done <- err
+		for i := 0; i < n; i++ {
+			if c, ok := receivers[i].(duplex); ok {
+				if cl, ok := c.Writer.(io.Closer); ok {
+					cl.Close()
+				}
+			}
+		}
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "omitted") {
+			t.Fatalf("want omission error, got %v", err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("sharded receive hung on an omitting sender")
+	}
+	wg.Wait()
+}
+
+func TestShardWants(t *testing.T) {
+	_, root := buildTree(t)
+	keys := []key.Key{root, root, root, root, root}
+	shards := shardWants(keys, 3)
+	if len(shards) != 3 {
+		t.Fatalf("want 3 shards, got %d", len(shards))
+	}
+	var total int
+	for i, sh := range shards {
+		total += len(sh)
+		if len(sh) < 1 || len(sh) > 2 {
+			t.Fatalf("shard %d has %d keys; round-robin must balance within 1", i, len(sh))
+		}
+	}
+	if total != len(keys) {
+		t.Fatalf("shards carry %d keys, want %d", total, len(keys))
 	}
 }

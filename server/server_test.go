@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -295,7 +296,7 @@ func TestPullTransfersTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := wantsync.Receive(c, dest, k, 0, nil); err != nil {
+	if _, err := wantsync.Receive([]io.ReadWriter{c}, dest, k, 0, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := fstree.CheckComplete(k, dest.Get, dest.Has, 0); err != nil {
@@ -392,5 +393,107 @@ func TestUnknownOperation(t *testing.T) {
 	}
 	if m.Type != protocol.TErr || m.Code != protocol.CodeBadRequest {
 		t.Fatalf("want bad-request, got %+v", m)
+	}
+}
+
+// shardedPush drives a full sharded push against srv: a control pipe plus
+// extra attached data pipes, one Send loop per channel.
+func shardedPush(t *testing.T, srv *Server, st *packstore.Store, name string, root key.Key, dataConns, attach int) (protocol.Msg, error) {
+	t.Helper()
+	ctrl, s1 := net.Pipe()
+	done := make(chan struct{})
+	go func() { defer close(done); srv.HandleStream("test-client", s1) }()
+	defer func() { ctrl.Close(); <-done }()
+
+	req := protocol.Msg{Type: protocol.TPush, Name: name, Root: root[:], DataConns: dataConns}
+	if err := protocol.WriteMsg(ctrl, req); err != nil {
+		return protocol.Msg{}, err
+	}
+	acc, err := protocol.ReadMsg(ctrl)
+	if err != nil {
+		return protocol.Msg{}, err
+	}
+	if acc.Type != protocol.TAccept || len(acc.Token) == 0 {
+		return protocol.Msg{}, fmt.Errorf("want TAccept with token, got %+v", acc)
+	}
+
+	channels := []io.ReadWriter{ctrl}
+	for i := 0; i < attach; i++ {
+		c, sN := net.Pipe()
+		go srv.HandleStream("test-client", sN)
+		if err := protocol.WriteMsg(c, protocol.Msg{Type: protocol.TAttach, Token: acc.Token}); err != nil {
+			return protocol.Msg{}, err
+		}
+		defer c.Close()
+		channels = append(channels, c)
+	}
+
+	errs := make([]error, len(channels))
+	var wg sync.WaitGroup
+	for i, ch := range channels {
+		wg.Add(1)
+		go func(i int, ch io.ReadWriter) {
+			defer wg.Done()
+			errs[i] = wantsync.Send(ch, st, nil)
+		}(i, ch)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			return protocol.Msg{}, fmt.Errorf("send on channel %d: %w", i, err)
+		}
+	}
+	return protocol.ReadMsg(ctrl)
+}
+
+func TestPushShardedOverPipes(t *testing.T) {
+	srv := testServer(t)
+	st, root := clientStore(t)
+	m, err := shardedPush(t, srv, st, "sharded/ref", root, 2, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Type != protocol.TOK {
+		t.Fatalf("want TOK, got %+v", m)
+	}
+	if err := fstree.CheckComplete(root, srv.objects.Get, srv.objects.Has, 0); err != nil {
+		t.Fatalf("server store incomplete after sharded push: %v", err)
+	}
+}
+
+// TestPushShardedLenientGather promises more data connections than it
+// attaches; the transfer must proceed with what arrived instead of
+// stalling or failing.
+func TestPushShardedLenientGather(t *testing.T) {
+	srv := testServer(t)
+	srv.attachWait = 200 * time.Millisecond
+	st, root := clientStore(t)
+	m, err := shardedPush(t, srv, st, "lenient/ref", root, 3, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Type != protocol.TOK {
+		t.Fatalf("want TOK, got %+v", m)
+	}
+	if err := fstree.CheckComplete(root, srv.objects.Get, srv.objects.Has, 0); err != nil {
+		t.Fatalf("server store incomplete: %v", err)
+	}
+}
+
+func TestAttachUnknownToken(t *testing.T) {
+	srv := testServer(t)
+	c, sN := net.Pipe()
+	done := make(chan struct{})
+	go func() { defer close(done); srv.HandleStream("test-client", sN) }()
+	defer func() { c.Close(); <-done }()
+	if err := protocol.WriteMsg(c, protocol.Msg{Type: protocol.TAttach, Token: []byte("bogus")}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := protocol.ReadMsg(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Type != protocol.TErr || m.Code != protocol.CodeBadRequest {
+		t.Fatalf("want bad-request for unknown token, got %+v", m)
 	}
 }

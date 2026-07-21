@@ -167,14 +167,15 @@ func TestDedupeKeys(t *testing.T) {
 }
 
 func TestCheckDeliveredReportsMissing(t *testing.T) {
-	st, root := buildTree(t)
-	if err := checkDelivered(st, []key.Key{root}); err != nil {
-		t.Fatalf("present key: %v", err)
+	ks := mkKeys(2)
+	got, absent := ks[0], ks[1]
+	received := map[key.Key]bool{got: true}
+	if err := checkDelivered(received, []key.Key{got}); err != nil {
+		t.Fatalf("received key: %v", err)
 	}
-	absent := mkKeys(1)[0]
-	err := checkDelivered(st, []key.Key{root, absent})
+	err := checkDelivered(received, []key.Key{got, absent})
 	if err == nil {
-		t.Fatal("absent key must be reported")
+		t.Fatal("undelivered key must be reported")
 	}
 	if !strings.Contains(err.Error(), "1 of 2") || !strings.Contains(err.Error(), absent.String()) {
 		t.Fatalf("error must name the count and an example: %v", err)

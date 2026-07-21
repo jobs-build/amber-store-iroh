@@ -114,6 +114,7 @@ func Receive(rw io.ReadWriter, st *packstore.Store, root key.Key, jobs int) erro
 			return nil
 		}
 		var next []key.Key
+		received := make(map[key.Key]bool, len(wants))
 		packSrc := protocol.NewPackReader(rw)
 		tracked := &errTrackingReader{Reader: packSrc}
 		pr := amberpack.NewReader(tracked)
@@ -128,6 +129,7 @@ func Receive(rw io.ReadWriter, st *packstore.Store, root key.Key, jobs int) erro
 					yield(packstore.Object{}, err)
 					return
 				}
+				received[o.Key] = true
 				next = append(next, kids...)
 				if !yield(packstore.Object{Key: o.Key, Data: o.Bytes}, nil) {
 					return
@@ -151,7 +153,7 @@ func Receive(rw io.ReadWriter, st *packstore.Store, root key.Key, jobs int) erro
 		if _, err := io.Copy(io.Discard, packSrc); err != nil {
 			return err
 		}
-		if err := checkDelivered(st, wants); err != nil {
+		if err := checkDelivered(received, wants); err != nil {
 			return err
 		}
 		// Carried-over wants rejoin the frontier; Wants dedupes them
@@ -163,16 +165,16 @@ func Receive(rw io.ReadWriter, st *packstore.Store, root key.Key, jobs int) erro
 // checkDelivered fails when the sender did not deliver every key this
 // round asked for. The frontier only advances to children of received
 // objects, so an omitted want would otherwise vanish silently and let an
-// incomplete tree end the loop as success.
-func checkDelivered(st *packstore.Store, wants []key.Key) error {
+// incomplete tree end the loop as success. Receipt is judged by what
+// arrived in the pack, not by store presence: a key requested because it
+// was present but incomplete already satisfies Has, so presence would let
+// a sender skip exactly the resume rounds. An honest sender always resends
+// every requested key.
+func checkDelivered(received map[key.Key]bool, wants []key.Key) error {
 	missing := 0
 	var example key.Key
 	for _, k := range wants {
-		ok, err := st.Has(k)
-		if err != nil {
-			return err
-		}
-		if !ok {
+		if !received[k] {
 			if missing == 0 {
 				example = k
 			}

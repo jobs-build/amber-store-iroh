@@ -99,6 +99,43 @@ func TestLoopResumesPartialTransfer(t *testing.T) {
 func TestLoopSenderOmitsWantedObject(t *testing.T) {
 	_, root := buildTree(t)
 	dest := openStore(t)
+	err := receiveFromEmptyPackSender(t, dest, root)
+	if err == nil {
+		t.Fatal("undelivered wants must fail the loop, not succeed")
+	}
+	if !strings.Contains(err.Error(), "omitted 1 of 1") {
+		t.Fatalf("error must name the missing wants: %v", err)
+	}
+}
+
+// TestLoopSenderOmitsIncompleteWantedObject is the resume-path variant: the
+// root is already present but incomplete, so it is requested again even
+// though the store would answer Has for it. Delivery must be judged by what
+// the pack actually carried, or a sender could skip exactly these rounds
+// and still have the loop report success over an incomplete tree.
+func TestLoopSenderOmitsIncompleteWantedObject(t *testing.T) {
+	src, root := buildTree(t)
+	dest := openStore(t)
+	rootBytes, err := src.Get(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dest.Put(root, rootBytes); err != nil {
+		t.Fatal(err)
+	}
+	err = receiveFromEmptyPackSender(t, dest, root)
+	if err == nil {
+		t.Fatal("a present-but-incomplete want left undelivered must fail the loop")
+	}
+	if !strings.Contains(err.Error(), "omitted 1 of 1") {
+		t.Fatalf("error must name the missing wants: %v", err)
+	}
+}
+
+// receiveFromEmptyPackSender runs Receive against a sender that answers
+// every want round with a well-formed but empty pack.
+func receiveFromEmptyPackSender(t *testing.T, dest *packstore.Store, root key.Key) error {
+	t.Helper()
 	a, b := pipePair()
 	go func() {
 		for {
@@ -115,13 +152,7 @@ func TestLoopSenderOmitsWantedObject(t *testing.T) {
 			}
 		}
 	}()
-	err := Receive(b, dest, root, 0)
-	if err == nil {
-		t.Fatal("undelivered wants must fail the loop, not succeed")
-	}
-	if !strings.Contains(err.Error(), "omitted 1 of 1") {
-		t.Fatalf("error must name the missing wants: %v", err)
-	}
+	return Receive(b, dest, root, 0)
 }
 
 // TestLoopSenderMissingObject syncs from a sender that lacks the tree:

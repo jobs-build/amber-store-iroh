@@ -345,7 +345,7 @@ git commit -m "feat: wire protocol frame codec (CBOR frames over QUIC streams)"
 - Consumes: Task 1 (`WriteMsg`, `ReadMsg`, `Msg`, `TData`, `TDataEnd`, `TErr`, `ErrProtocol`, `RemoteFromMsg`, `ChunkSize`).
 - Produces:
   - `func SendPack(w io.Writer, objs iter.Seq2[fstree.Object, error]) error` — serializes objects as one amberpack, chunked into TData frames, terminated by TDataEnd. Returns the first error from `objs` without sending TDataEnd (caller sends TErr).
-  - `func NewPackReader(r io.Reader) io.Reader` — reader over the pack bytes of a TData…TDataEnd sequence; a TErr frame surfaces as `*RemoteError`, any other frame as `ErrProtocol`.
+  - `func NewPackReader(r io.Reader) io.Reader` — reader over the pack bytes of a TData…TDataEnd sequence; a TErr frame surfaces as `*RemoteError`, any other frame as `ErrProtocol`. **Contract:** the TDataEnd frame is only consumed by reading to EOF; amberpack's decoder stops at its own end marker without triggering that read, so consumers must drain the pack reader (`io.Copy(io.Discard, pr)`) before reading further frames from the stream.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -399,12 +399,17 @@ func TestPackRoundTrip(t *testing.T) {
 	if err := SendPack(&buf, seqOf(objs, -1, nil)); err != nil {
 		t.Fatalf("SendPack: %v", err)
 	}
+	pr := NewPackReader(&buf)
 	var got []fstree.Object
-	for o, err := range amberpack.NewReader(NewPackReader(&buf)).All() {
+	for o, err := range amberpack.NewReader(pr).All() {
 		if err != nil {
 			t.Fatalf("read pack: %v", err)
 		}
 		got = append(got, o)
+	}
+	// amberpack stops at its own end marker; draining consumes TDataEnd.
+	if _, err := io.Copy(io.Discard, pr); err != nil {
+		t.Fatalf("drain: %v", err)
 	}
 	if len(got) != len(objs) {
 		t.Fatalf("got %d objects, want %d", len(got), len(objs))
@@ -994,7 +999,8 @@ func Receive(rw io.ReadWriter, st *packstore.Store, root key.Key, jobs int) erro
 			return nil
 		}
 		var next []key.Key
-		pr := amberpack.NewReader(protocol.NewPackReader(rw))
+		packSrc := protocol.NewPackReader(rw)
+		pr := amberpack.NewReader(packSrc)
 		seq := func(yield func(packstore.Object, error) bool) {
 			for o, err := range pr.All() {
 				if err != nil {
@@ -1013,6 +1019,11 @@ func Receive(rw io.ReadWriter, st *packstore.Store, root key.Key, jobs int) erro
 			}
 		}
 		if _, err := st.WriteParallel(seq, packstore.WriteOpts{Verify: true}); err != nil {
+			return err
+		}
+		// amberpack's decoder stops at its own end marker; drain through
+		// our TDataEnd frame so the stream is positioned for the next round.
+		if _, err := io.Copy(io.Discard, packSrc); err != nil {
 			return err
 		}
 		frontier = next

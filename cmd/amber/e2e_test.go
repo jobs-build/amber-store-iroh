@@ -413,3 +413,34 @@ func TestE2EPullUnknownRef(t *testing.T) {
 		t.Fatalf("want unknown-ref, got %v", err)
 	}
 }
+
+// TestE2EDialRacesDeadCandidates pins the gx10 incident: candidate lists
+// can carry unreachable addresses (container bridges) that sort before
+// the live ones, and a serial walk exhausts the handshake budget on
+// them. The dial must race candidates so one dead, low-sorting address
+// costs nothing.
+func TestE2EDialRacesDeadCandidates(t *testing.T) {
+	id, addrArgs := startServer(t)
+	// addrArgs alternates "--addr", "host:port"; keep the values only.
+	var live []string
+	for i := 1; i < len(addrArgs); i += 2 {
+		live = append(live, addrArgs[i])
+	}
+	// 192.0.2.0/24 (TEST-NET-1) is reserved and never routed; it sorts
+	// before every loopback/LAN candidate the server yields.
+	cands := append([]string{"192.0.2.1:9"}, live...)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	start := time.Now()
+	conn, closeConn, err := dialServer(ctx, id, cands, "")
+	if err != nil {
+		t.Fatalf("dial with dead candidate: %v", err)
+	}
+	defer closeConn()
+	elapsed := time.Since(start)
+	if elapsed > 4*time.Second {
+		t.Fatalf("dial took %v; a dead candidate must not delay the race", elapsed)
+	}
+	_ = conn
+}

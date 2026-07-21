@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -94,11 +95,11 @@ func dialServer(ctx context.Context, serverID string, directAddrs []string, rela
 		if err != nil {
 			return nil, nil, fmt.Errorf("bind: %w", err)
 		}
-		addr := netaddr.NewEndpointAddr(id)
-		for _, ap := range aps {
-			addr = addr.WithIP(ap)
+		cands := make([]netaddr.TransportAddr, len(aps))
+		for i, ap := range aps {
+			cands[i] = netaddr.IPAddr{Addr: ap}
 		}
-		conn, err := ep.Connect(ctx, addr, protocol.ALPN)
+		conn, err := raceConnect(ctx, ep, id, cands)
 		if err != nil {
 			ep.Shutdown(ctx)
 			return nil, nil, fmt.Errorf("connect: %w", err)
@@ -143,7 +144,12 @@ func dialServer(ctx context.Context, serverID string, directAddrs []string, rela
 	}
 
 	// Connect does no discovery on its own: it only dials addresses
-	// already present in the EndpointAddr, so resolve first.
+	// already present in the EndpointAddr, so resolve first. One
+	// resolver's answer can be a partial view — mDNS yields direct
+	// addresses with no relay, and any single record may list candidates
+	// this network can't reach — so union every resolver's candidates:
+	// the relay then always remains available as fallback when a direct
+	// candidate turns out to be dead.
 	addr := netaddr.NewEndpointAddr(id)
 	resolved := false
 	var lastErr error
@@ -152,9 +158,8 @@ func dialServer(ctx context.Context, serverID string, directAddrs []string, rela
 			lastErr = err
 			continue
 		}
-		addr = item.Addr()
+		addr = addr.WithAddrs(item.Addr().Addrs()...)
 		resolved = true
-		break
 	}
 	if !resolved {
 		ep.Shutdown(ctx)
@@ -164,10 +169,62 @@ func dialServer(ctx context.Context, serverID string, directAddrs []string, rela
 		return nil, nil, fmt.Errorf("no address found for endpoint %s", id)
 	}
 
-	conn, err := ep.Connect(ctx, addr, protocol.ALPN)
+	conn, err := raceConnect(ctx, ep, id, addr.Addrs())
 	if err != nil {
 		ep.Shutdown(ctx)
 		return nil, nil, fmt.Errorf("connect: %w", err)
 	}
 	return conn, func() { conn.Close(); ep.Shutdown(context.Background()) }, nil
+}
+
+// raceConnect dials every candidate address concurrently and returns the
+// first connection to complete. go-iroh's own multi-candidate connect
+// walks a sorted candidate list with a per-candidate budget, so a few
+// unreachable addresses (which sort low: container-bridge 10.x/172.x
+// before LAN 192.168.x) exhaust the handshake window before a live one is
+// tried; a live candidate answers in milliseconds when dialed directly.
+// Losing attempts are canceled; late winners are closed.
+func raceConnect(ctx context.Context, ep *iroh.Endpoint, id irohkey.EndpointID, cands []netaddr.TransportAddr) (*iroh.Conn, error) {
+	if len(cands) == 0 {
+		return nil, fmt.Errorf("no candidate addresses for endpoint %s", id)
+	}
+	type result struct {
+		conn *iroh.Conn
+		err  error
+	}
+	results := make(chan result, len(cands))
+	cancels := make([]context.CancelFunc, len(cands))
+	for i, ta := range cands {
+		actx, cancel := context.WithCancel(ctx)
+		cancels[i] = cancel
+		go func(ta netaddr.TransportAddr) {
+			conn, err := ep.Connect(actx, netaddr.NewEndpointAddr(id, ta), protocol.ALPN)
+			results <- result{conn, err}
+		}(ta)
+	}
+	var errs []error
+	for range cands {
+		r := <-results
+		if r.err != nil {
+			errs = append(errs, r.err)
+			continue
+		}
+		// Winner: stop the losers and close any that already made it.
+		for _, cancel := range cancels {
+			cancel()
+		}
+		remaining := len(cands) - len(errs) - 1
+		go func(n int) {
+			for ; n > 0; n-- {
+				if late := <-results; late.conn != nil {
+					late.conn.Close()
+				}
+			}
+		}(remaining)
+		return r.conn, nil
+	}
+	for _, cancel := range cancels {
+		cancel()
+	}
+	return nil, errors.Join(errs...)
 }

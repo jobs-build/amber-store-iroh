@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fables-for-robots/amber-store-core/ingest"
-	"github.com/fables-for-robots/amber-store-core/reference"
+	"github.com/jobs-build/amber-store-core/ingest"
+	"github.com/jobs-build/amber-store-core/reference"
 	"github.com/urfave/cli/v2"
 )
 

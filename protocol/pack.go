@@ -5,8 +5,8 @@ import (
 	"io"
 	"iter"
 
-	"github.com/fables-for-robots/amber-store-core/amberpack"
-	"github.com/fables-for-robots/amber-store-core/fstree"
+	"github.com/jobs-build/amber-store-core/amberpack"
+	"github.com/jobs-build/amber-store-core/fstree"
 )
 
 // SendPack serializes objs as one amberpack embedded in TData frames and

@@ -1,10 +1,10 @@
-module github.com/fables-for-robots/amber-store-iroh
+module github.com/jobs-build/amber-store-iroh
 
 go 1.26.5
 
 require (
-	github.com/fables-for-robots/amber-store-core v0.0.0-20260720222444-a37d35fa4ecf
 	github.com/fxamacker/cbor/v2 v2.9.2
+	github.com/jobs-build/amber-store-core v0.0.0-20260727080459-e4fcb60cba49
 	github.com/tmc/go-iroh v0.0.0-20260714221401-b17af420bb03
 	github.com/urfave/cli/v2 v2.27.7
 	golang.org/x/sys v0.46.0

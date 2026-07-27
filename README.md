@@ -1,7 +1,7 @@
 # Amber-Store Iroh
 
 A peer-to-peer distributed layer over
-[amber-store-core](https://github.com/fables-for-robots/amber-store-core):
+[amber-store-core](https://github.com/jobs-build/amber-store-core):
 `amber-serve` hosts an amber store reachable over [iroh](https://iroh.computer)
 QUIC; `amber` owns a local store copy, imports directories, and pushes/pulls
 refs (with only the missing objects crossing the wire).
@@ -67,6 +67,6 @@ The wire protocol (CBOR frames, have/want rounds, chunked amberpack
 payloads) is specified in
 [`docs/superpowers/specs/2026-07-21-amber-store-iroh-design.md`](docs/superpowers/specs/2026-07-21-amber-store-iroh-design.md).
 
-- Module: `github.com/fables-for-robots/amber-store-iroh` (fetching the
-  private core module needs `GOPRIVATE=github.com/fables-for-robots/*`).
+- Module: `github.com/jobs-build/amber-store-iroh` (fetching the
+  private core module needs `GOPRIVATE=github.com/jobs-build/*`).
 - Go: 1.26+

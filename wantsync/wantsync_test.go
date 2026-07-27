@@ -6,10 +6,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fables-for-robots/amber-store-core/ingest"
-	"github.com/fables-for-robots/amber-store-core/key"
-	"github.com/fables-for-robots/amber-store-core/packstore"
-	"github.com/fables-for-robots/amber-store-iroh/protocol"
+	"github.com/jobs-build/amber-store-core/ingest"
+	"github.com/jobs-build/amber-store-core/key"
+	"github.com/jobs-build/amber-store-core/packstore"
+	"github.com/jobs-build/amber-store-iroh/protocol"
 )
 
 // buildTree ingests a small directory tree into a fresh packstore and

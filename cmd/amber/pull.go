@@ -9,10 +9,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fables-for-robots/amber-store-core/key"
-	"github.com/fables-for-robots/amber-store-core/reference"
-	"github.com/fables-for-robots/amber-store-iroh/protocol"
-	"github.com/fables-for-robots/amber-store-iroh/wantsync"
+	"github.com/jobs-build/amber-store-core/key"
+	"github.com/jobs-build/amber-store-core/reference"
+	"github.com/jobs-build/amber-store-iroh/protocol"
+	"github.com/jobs-build/amber-store-iroh/wantsync"
 	"github.com/urfave/cli/v2"
 )
 

@@ -8,10 +8,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fables-for-robots/amber-store-core/fstree"
-	"github.com/fables-for-robots/amber-store-core/key"
-	"github.com/fables-for-robots/amber-store-core/packstore"
-	"github.com/fables-for-robots/amber-store-iroh/protocol"
+	"github.com/jobs-build/amber-store-core/fstree"
+	"github.com/jobs-build/amber-store-core/key"
+	"github.com/jobs-build/amber-store-core/packstore"
+	"github.com/jobs-build/amber-store-iroh/protocol"
 )
 
 // duplex joins one side's reader with its writer.

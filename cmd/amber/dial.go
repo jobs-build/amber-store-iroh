@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fables-for-robots/amber-store-iroh/protocol"
-	"github.com/fables-for-robots/amber-store-iroh/relaymode"
+	"github.com/jobs-build/amber-store-iroh/protocol"
+	"github.com/jobs-build/amber-store-iroh/relaymode"
 	"github.com/tmc/go-iroh/iroh"
 	"github.com/tmc/go-iroh/iroh/mdns"
 	irohkey "github.com/tmc/go-iroh/key"

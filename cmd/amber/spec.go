@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/fables-for-robots/amber-store-core/fstree"
-	"github.com/fables-for-robots/amber-store-core/key"
-	"github.com/fables-for-robots/amber-store-core/packstore"
-	"github.com/fables-for-robots/amber-store-core/reference"
-	"github.com/fables-for-robots/amber-store-core/refstore"
+	"github.com/jobs-build/amber-store-core/fstree"
+	"github.com/jobs-build/amber-store-core/key"
+	"github.com/jobs-build/amber-store-core/packstore"
+	"github.com/jobs-build/amber-store-core/reference"
+	"github.com/jobs-build/amber-store-core/refstore"
 )
 
 // resolveSpec parses a content spec: either KEY[/PATH] (lowercase-hex key,

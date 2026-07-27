@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/fables-for-robots/amber-store-core/tarexport"
-	"github.com/fables-for-robots/amber-store-core/tarextract"
+	"github.com/jobs-build/amber-store-core/tarexport"
+	"github.com/jobs-build/amber-store-core/tarextract"
 	"github.com/urfave/cli/v2"
 )
 

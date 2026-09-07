@@ -42,6 +42,10 @@ type Server struct {
 	// sockets (one endpoint's socket loop caps out well below a fast
 	// link).
 	dataPorts []uint16
+	// dataEndpoints, when set, snapshots the data endpoints' identities and
+	// live dial candidates for TAccept/TRef — a closure because relay and
+	// QAD candidates appear asynchronously after bind.
+	dataEndpoints func() []protocol.DataEndpointRec
 
 	mu       sync.Mutex
 	refLocks map[string]*sync.Mutex
@@ -156,6 +160,10 @@ func New(log *slog.Logger, objects *packstore.Store, refs *refstore.Store) *Serv
 // SetDataPorts records the data-endpoint ports advertised to sharding
 // clients. Call before Serve.
 func (s *Server) SetDataPorts(ports []uint16) { s.dataPorts = ports }
+
+// SetDataEndpoints installs the data-endpoint snapshot advertised to
+// sharding clients; call before Serve, like SetDataPorts.
+func (s *Server) SetDataEndpoints(f func() []protocol.DataEndpointRec) { s.dataEndpoints = f }
 
 // lockRef serializes ref commits per name so compare-and-swap is
 // race-free under concurrent pushes. Entries are never removed; the map
@@ -332,7 +340,11 @@ func (s *Server) shardChannels(rw io.ReadWriter, dataConns int) ([]io.ReadWriter
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := protocol.WriteMsg(rw, protocol.Msg{Type: protocol.TAccept, Token: token, DataPorts: s.dataPorts}); err != nil {
+	accept := protocol.Msg{Type: protocol.TAccept, Token: token, DataPorts: s.dataPorts}
+	if s.dataEndpoints != nil {
+		accept.DataEndpoints = s.dataEndpoints()
+	}
+	if err := protocol.WriteMsg(rw, accept); err != nil {
 		s.transfers.drop(token)
 		return nil, nil, err
 	}
@@ -399,6 +411,9 @@ func (s *Server) handlePull(rw io.ReadWriter, m protocol.Msg) error {
 		}
 		ref.Token = token
 		ref.DataPorts = s.dataPorts
+		if s.dataEndpoints != nil {
+			ref.DataEndpoints = s.dataEndpoints()
+		}
 	}
 	if err := protocol.WriteMsg(rw, ref); err != nil {
 		if token != nil {

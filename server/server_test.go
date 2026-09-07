@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -502,5 +503,42 @@ func TestAttachWaitDefaultCoversPunching(t *testing.T) {
 	s := New(slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
 	if s.attachWait != 10*time.Second {
 		t.Fatalf("attachWait %v, want 10s (punching attaches ride the relay first)", s.attachWait)
+	}
+}
+
+func TestShardChannelsAdvertisesDataEndpoints(t *testing.T) {
+	s := New(slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	s.attachWait = 50 * time.Millisecond
+	s.SetDataPorts([]uint16{4001})
+	rec := protocol.DataEndpointRec{ID: bytes.Repeat([]byte{7}, 32), Addrs: []string{"ip:127.0.0.1:4001"}}
+	s.SetDataEndpoints(func() []protocol.DataEndpointRec { return []protocol.DataEndpointRec{rec} })
+
+	cli, srv := net.Pipe()
+	got := make(chan protocol.Msg, 1)
+	go func() {
+		m, err := protocol.ReadMsg(cli)
+		if err != nil {
+			t.Error(err)
+		}
+		got <- m
+		cli.Close()
+	}()
+	channels, release, err := s.shardChannels(srv, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if len(channels) != 1 {
+		t.Fatalf("gathered %d channels, want control only", len(channels))
+	}
+	m := <-got
+	if m.Type != protocol.TAccept {
+		t.Fatalf("type %d, want TAccept", m.Type)
+	}
+	if !reflect.DeepEqual(m.DataEndpoints, []protocol.DataEndpointRec{rec}) {
+		t.Fatalf("DataEndpoints %+v, want %+v", m.DataEndpoints, rec)
+	}
+	if !reflect.DeepEqual(m.DataPorts, []uint16{4001}) {
+		t.Fatalf("DataPorts %+v", m.DataPorts)
 	}
 }

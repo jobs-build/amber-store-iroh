@@ -18,8 +18,8 @@ import (
 	"github.com/amber-store/core/packstore"
 	"github.com/amber-store/core/reference"
 	"github.com/amber-store/core/refstore"
-	"github.com/jobs-build/amber-store-iroh/protocol"
-	"github.com/jobs-build/amber-store-iroh/wantsync"
+	"github.com/amber-store/transport-iroh/protocol"
+	"github.com/amber-store/transport-iroh/wantsync"
 	"github.com/tmc/go-iroh/iroh"
 )
 

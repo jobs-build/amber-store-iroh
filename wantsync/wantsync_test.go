@@ -9,7 +9,7 @@ import (
 	"github.com/amber-store/core/ingest"
 	"github.com/amber-store/core/key"
 	"github.com/amber-store/core/packstore"
-	"github.com/jobs-build/amber-store-iroh/protocol"
+	"github.com/amber-store/transport-iroh/protocol"
 )
 
 // buildTree ingests a small directory tree into a fresh packstore and

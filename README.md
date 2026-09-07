@@ -67,6 +67,6 @@ The wire protocol (CBOR frames, have/want rounds, chunked amberpack
 payloads) is specified in
 [`docs/superpowers/specs/2026-07-21-amber-store-iroh-design.md`](docs/superpowers/specs/2026-07-21-amber-store-iroh-design.md).
 
-- Module: `github.com/jobs-build/amber-store-iroh` (fetching the
+- Module: `github.com/amber-store/transport-iroh` (fetching the
   private core module needs `GOPRIVATE=github.com/jobs-build/*`).
 - Go: 1.26+

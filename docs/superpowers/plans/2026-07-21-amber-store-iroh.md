@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Repo: `/Users/dragan/fables-for-robots/amber-store-iroh`, module `github.com/jobs-build/amber-store-iroh`, Go `1.26.5`.
+- Repo: `/Users/dragan/fables-for-robots/amber-store-iroh`, module `github.com/amber-store/transport-iroh`, Go `1.26.5`.
 - Every Go command runs through the flake: `nix develop -c go <args>` (no system Go).
 - Dependency versions: `github.com/amber-store/core` at branch `main` (commit `a37d35fa4ecfb2a6919fac30ca614941a9734e06` is the tested one), `github.com/tmc/go-iroh v0.0.0-20260714221401-b17af420bb03` (same as irohese), `github.com/urfave/cli/v2 v2.27.7`, `github.com/fxamacker/cbor/v2 v2.9.2` (same as core).
 - amber-store-core is a private GitHub repo reached over SSH: before `go get`, run `git config --global url."git@github.com:jobs-build/".insteadOf "https://github.com/jobs-build/"` only if not already configured, and set `GOPRIVATE=github.com/jobs-build/*` (use `nix develop -c bash -c 'GOPRIVATE=github.com/jobs-build/* go get ...'`). If the fetch fails, STOP and report — do not switch to a `replace` directive.
@@ -323,7 +323,7 @@ func RemoteFromMsg(m Msg) *RemoteError {
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `nix develop -c bash -c 'go mod tidy && go test ./protocol/'`
-Expected: `ok  github.com/jobs-build/amber-store-iroh/protocol`
+Expected: `ok  github.com/amber-store/transport-iroh/protocol`
 
 - [ ] **Step 6: Commit**
 
@@ -871,7 +871,7 @@ import (
 	"github.com/amber-store/core/fstree"
 	"github.com/amber-store/core/key"
 	"github.com/amber-store/core/packstore"
-	"github.com/jobs-build/amber-store-iroh/protocol"
+	"github.com/amber-store/transport-iroh/protocol"
 )
 
 // duplex joins one side's reader with its writer.
@@ -978,7 +978,7 @@ Expected: FAIL — undefined `Receive`, `Send`.
 
 - [ ] **Step 3: Write the implementation**
 
-Append to `wantsync/wantsync.go` (add imports `fmt`, `io`, `github.com/amber-store/core/amberpack`, `github.com/jobs-build/amber-store-iroh/protocol`):
+Append to `wantsync/wantsync.go` (add imports `fmt`, `io`, `github.com/amber-store/core/amberpack`, `github.com/amber-store/transport-iroh/protocol`):
 
 ```go
 // Receive runs the receiving half of the want loop over rw: rounds of
@@ -1125,8 +1125,8 @@ import (
 	"github.com/amber-store/core/packstore"
 	"github.com/amber-store/core/reference"
 	"github.com/amber-store/core/refstore"
-	"github.com/jobs-build/amber-store-iroh/protocol"
-	"github.com/jobs-build/amber-store-iroh/wantsync"
+	"github.com/amber-store/transport-iroh/protocol"
+	"github.com/amber-store/transport-iroh/wantsync"
 )
 
 func testServer(t *testing.T) *Server {
@@ -1390,8 +1390,8 @@ import (
 	"github.com/amber-store/core/packstore"
 	"github.com/amber-store/core/reference"
 	"github.com/amber-store/core/refstore"
-	"github.com/jobs-build/amber-store-iroh/protocol"
-	"github.com/jobs-build/amber-store-iroh/wantsync"
+	"github.com/amber-store/transport-iroh/protocol"
+	"github.com/amber-store/transport-iroh/wantsync"
 )
 
 // Server answers amber-store-iroh operations against a single store.
@@ -1672,8 +1672,8 @@ import (
 
 	"github.com/amber-store/core/packstore"
 	"github.com/amber-store/core/refstore"
-	"github.com/jobs-build/amber-store-iroh/protocol"
-	"github.com/jobs-build/amber-store-iroh/server"
+	"github.com/amber-store/transport-iroh/protocol"
+	"github.com/amber-store/transport-iroh/server"
 	"github.com/tmc/go-iroh/dns"
 	"github.com/tmc/go-iroh/iroh"
 	irohkey "github.com/tmc/go-iroh/key"
@@ -2107,7 +2107,7 @@ import (
 	"fmt"
 	"net/netip"
 
-	"github.com/jobs-build/amber-store-iroh/protocol"
+	"github.com/amber-store/transport-iroh/protocol"
 	"github.com/tmc/go-iroh/iroh"
 	irohkey "github.com/tmc/go-iroh/key"
 	"github.com/tmc/go-iroh/netaddr"
@@ -2228,8 +2228,8 @@ import (
 	"github.com/amber-store/core/key"
 	"github.com/amber-store/core/reference"
 	"github.com/amber-store/core/refstore"
-	"github.com/jobs-build/amber-store-iroh/protocol"
-	"github.com/jobs-build/amber-store-iroh/wantsync"
+	"github.com/amber-store/transport-iroh/protocol"
+	"github.com/amber-store/transport-iroh/wantsync"
 	"github.com/urfave/cli/v2"
 )
 
@@ -2362,8 +2362,8 @@ import (
 
 	"github.com/amber-store/core/key"
 	"github.com/amber-store/core/reference"
-	"github.com/jobs-build/amber-store-iroh/protocol"
-	"github.com/jobs-build/amber-store-iroh/wantsync"
+	"github.com/amber-store/transport-iroh/protocol"
+	"github.com/amber-store/transport-iroh/wantsync"
 	"github.com/urfave/cli/v2"
 )
 
@@ -2461,7 +2461,7 @@ import (
 	"time"
 
 	"github.com/amber-store/core/key"
-	"github.com/jobs-build/amber-store-iroh/protocol"
+	"github.com/amber-store/transport-iroh/protocol"
 	"github.com/urfave/cli/v2"
 )
 
@@ -2579,8 +2579,8 @@ import (
 
 	"github.com/amber-store/core/packstore"
 	"github.com/amber-store/core/refstore"
-	"github.com/jobs-build/amber-store-iroh/protocol"
-	"github.com/jobs-build/amber-store-iroh/server"
+	"github.com/amber-store/transport-iroh/protocol"
+	"github.com/amber-store/transport-iroh/server"
 	"github.com/tmc/go-iroh/iroh"
 )
 
@@ -2835,7 +2835,7 @@ The wire protocol (CBOR frames, have/want rounds, chunked amberpack
 payloads) is specified in
 [`docs/superpowers/specs/2026-07-21-amber-store-iroh-design.md`](docs/superpowers/specs/2026-07-21-amber-store-iroh-design.md).
 
-- Module: `github.com/jobs-build/amber-store-iroh` (fetching the
+- Module: `github.com/amber-store/transport-iroh` (fetching the
   private core module needs `GOPRIVATE=github.com/jobs-build/*`).
 - Go: 1.26+
 ```

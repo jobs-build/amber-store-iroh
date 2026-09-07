@@ -39,6 +39,7 @@ const (
 	TErr     = 10 // either direction: terminal failure (Code, Text, Current)
 	TAttach  = 11 // client→server: attach this stream to a transfer (Token)
 	TAccept  = 12 // server→client: sharded transfer accepted (Token)
+	TPin     = 13 // client→server: keep these refs forever (Names) — GC pin-assert
 )
 
 // Error codes carried in TErr frames.
@@ -61,6 +62,19 @@ type RefInfo struct {
 	User      string `cbor:"3,keyasint,omitempty"`
 }
 
+// DataEndpointRec describes one of the server's data endpoints to a
+// sharding client: the endpoint's own identity (data endpoints carry their
+// own keys so each can hold a relay home connection — relays key sessions
+// by endpoint ID) and its dial candidates as netaddr.TransportAddr strings
+// ("ip:host:port", "relay:url"). The client trusts the identity because the
+// record arrives on the control connection, which authenticated the server;
+// the shard handshake then proves possession of the advertised key. Old
+// peers ignore the field and keep direct-dialing DataPorts.
+type DataEndpointRec struct {
+	ID    []byte   `cbor:"0,keyasint"`
+	Addrs []string `cbor:"1,keyasint,omitempty"`
+}
+
 // Msg is the single frame payload type.
 type Msg struct {
 	Type        int       `cbor:"0,keyasint"`
@@ -79,6 +93,13 @@ type Msg struct {
 	Token       []byte    `cbor:"13,keyasint,omitempty"` // transfer token for TAttach/TAccept (and TRef on sharded pulls)
 	DataConns   int       `cbor:"14,keyasint,omitempty"` // push/pull request: extra data connections the client will attach
 	DataPorts   []uint16  `cbor:"15,keyasint,omitempty"` // TAccept/TRef: server data-endpoint UDP ports for the extra connections
+	// DataEndpoints describes the data endpoints as punchable peers on
+	// TAccept/TRef. Its presence doubles as the capability signal that the
+	// server gathers attaches for the longer punch-friendly window.
+	DataEndpoints []DataEndpointRec `cbor:"16,keyasint,omitempty"`
+	// Names are the ref names of a TPin assert. Additive: old peers
+	// ignore the field, old servers answer TPin itself with TErr.
+	Names []string `cbor:"17,keyasint,omitempty"`
 }
 
 var (

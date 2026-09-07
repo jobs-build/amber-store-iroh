@@ -7,8 +7,8 @@ import (
 	"iter"
 	"testing"
 
-	"github.com/jobs-build/amber-store-core/amberpack"
-	"github.com/jobs-build/amber-store-core/fstree"
+	"github.com/amber-store/core/amberpack"
+	"github.com/amber-store/core/fstree"
 )
 
 // testObjects builds n distinct valid blobs.

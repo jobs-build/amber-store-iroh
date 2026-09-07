@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jobs-build/amber-store-core/ingest"
-	"github.com/jobs-build/amber-store-core/reference"
+	"github.com/amber-store/core/ingest"
+	"github.com/amber-store/core/reference"
 	"github.com/urfave/cli/v2"
 )
 

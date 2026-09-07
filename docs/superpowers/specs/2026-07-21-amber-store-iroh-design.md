@@ -6,7 +6,7 @@
 ## Purpose
 
 A peer-to-peer distributed layer over
-[amber-store-core](https://github.com/jobs-build/amber-store-core): a
+[amber-store-core](https://github.com/amber-store/core): a
 server that hosts an amber store reachable over
 [iroh](https://iroh.computer) QUIC (via `github.com/tmc/go-iroh`), and a
 client CLI that owns a local copy of the store, imports directories into it,
@@ -21,7 +21,7 @@ Decisions fixed during brainstorming:
 - **Ref updates:** compare-and-swap on push, with `--force` escape hatch.
 - **Binaries:** two — `cmd/amber-serve` and `cmd/amber` (like irohese's
   server/client split).
-- **Core dependency:** plain `require github.com/jobs-build/amber-store-core`
+- **Core dependency:** plain `require github.com/amber-store/core`
   fetched from GitHub (the core repo must be pushed; version pinned by
   tag or pseudo-version).
 - **Client scope:** full local toolkit — the local copy is fully usable

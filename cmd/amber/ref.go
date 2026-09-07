@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jobs-build/amber-store-core/key"
-	"github.com/jobs-build/amber-store-core/reference"
+	"github.com/amber-store/core/key"
+	"github.com/amber-store/core/reference"
 	"github.com/urfave/cli/v2"
 )
 

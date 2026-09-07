@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jobs-build/amber-store-core/key"
+	"github.com/amber-store/core/key"
 	"github.com/jobs-build/amber-store-iroh/protocol"
 	"github.com/urfave/cli/v2"
 )

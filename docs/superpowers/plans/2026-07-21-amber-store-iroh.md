@@ -6,7 +6,7 @@
 
 **Architecture:** Two binaries over four packages. `protocol` defines CBOR-framed wire messages and chunked amberpack streaming; `wantsync` implements both halves of the server-driven want loop (completeness-check pruning, verified writes); `server` dispatches push/pull/ref-list per QUIC stream with per-name CAS locking; `cmd/amber` mirrors amber-store-core's CLI locally and adds `push`/`pull`/`refs` network commands with remote-tracking refs.
 
-**Tech Stack:** Go 1.26, `github.com/jobs-build/amber-store-core` (packstore, refstore, reference, fstree, amberpack, ingest, tarexport, tarextract), `github.com/tmc/go-iroh`, `github.com/urfave/cli/v2`, `github.com/fxamacker/cbor/v2`.
+**Tech Stack:** Go 1.26, `github.com/amber-store/core` (packstore, refstore, reference, fstree, amberpack, ingest, tarexport, tarextract), `github.com/tmc/go-iroh`, `github.com/urfave/cli/v2`, `github.com/fxamacker/cbor/v2`.
 
 **Spec:** `docs/superpowers/specs/2026-07-21-amber-store-iroh-design.md`. One deliberate deviation: received packs are NOT staged through core's `inbox` package — the receiver decodes the amberpack stream and writes objects straight into the packstore with `WriteParallel(..., WriteOpts{Verify: true})`. This is simpler for a synchronous round-based loop and adds content-vs-key verification of untrusted peer data; durability comes from `packstore.WithSync(true)`. The spec file is updated to match in Task 10.
 
@@ -14,7 +14,7 @@
 
 - Repo: `/Users/dragan/fables-for-robots/amber-store-iroh`, module `github.com/jobs-build/amber-store-iroh`, Go `1.26.5`.
 - Every Go command runs through the flake: `nix develop -c go <args>` (no system Go).
-- Dependency versions: `github.com/jobs-build/amber-store-core` at branch `main` (commit `a37d35fa4ecfb2a6919fac30ca614941a9734e06` is the tested one), `github.com/tmc/go-iroh v0.0.0-20260714221401-b17af420bb03` (same as irohese), `github.com/urfave/cli/v2 v2.27.7`, `github.com/fxamacker/cbor/v2 v2.9.2` (same as core).
+- Dependency versions: `github.com/amber-store/core` at branch `main` (commit `a37d35fa4ecfb2a6919fac30ca614941a9734e06` is the tested one), `github.com/tmc/go-iroh v0.0.0-20260714221401-b17af420bb03` (same as irohese), `github.com/urfave/cli/v2 v2.27.7`, `github.com/fxamacker/cbor/v2 v2.9.2` (same as core).
 - amber-store-core is a private GitHub repo reached over SSH: before `go get`, run `git config --global url."git@github.com:jobs-build/".insteadOf "https://github.com/jobs-build/"` only if not already configured, and set `GOPRIVATE=github.com/jobs-build/*` (use `nix develop -c bash -c 'GOPRIVATE=github.com/jobs-build/* go get ...'`). If the fetch fails, STOP and report — do not switch to a `replace` directive.
 - ALPN string is exactly `amber-store-iroh/1` everywhere (`protocol.ALPN`); never retype it inline.
 - The local refstore namespace prefix for remote-tracking refs is exactly `remotes/` (`trackingPrefix` in `cmd/amber`).
@@ -46,7 +46,7 @@
 
 ```sh
 cd /Users/dragan/fables-for-robots/amber-store-iroh
-nix develop -c bash -c 'GOPRIVATE=github.com/jobs-build/* go get github.com/jobs-build/amber-store-core@main github.com/tmc/go-iroh@v0.0.0-20260714221401-b17af420bb03 github.com/urfave/cli/v2@v2.27.7 github.com/fxamacker/cbor/v2@v2.9.2'
+nix develop -c bash -c 'GOPRIVATE=github.com/jobs-build/* go get github.com/amber-store/core@main github.com/tmc/go-iroh@v0.0.0-20260714221401-b17af420bb03 github.com/urfave/cli/v2@v2.27.7 github.com/fxamacker/cbor/v2@v2.9.2'
 nix develop -c go mod tidy   # will prune until code exists; rerun after Step 3
 ```
 Expected: go.mod gains the requires (some marked `// indirect` until code imports them). If the core fetch fails with auth errors, STOP and report.
@@ -361,8 +361,8 @@ import (
 	"iter"
 	"testing"
 
-	"github.com/jobs-build/amber-store-core/amberpack"
-	"github.com/jobs-build/amber-store-core/fstree"
+	"github.com/amber-store/core/amberpack"
+	"github.com/amber-store/core/fstree"
 )
 
 // testObjects builds n distinct valid blobs.
@@ -478,8 +478,8 @@ import (
 	"io"
 	"iter"
 
-	"github.com/jobs-build/amber-store-core/amberpack"
-	"github.com/jobs-build/amber-store-core/fstree"
+	"github.com/amber-store/core/amberpack"
+	"github.com/amber-store/core/fstree"
 )
 
 // SendPack serializes objs as one amberpack embedded in TData frames and
@@ -625,9 +625,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/jobs-build/amber-store-core/ingest"
-	"github.com/jobs-build/amber-store-core/key"
-	"github.com/jobs-build/amber-store-core/packstore"
+	"github.com/amber-store/core/ingest"
+	"github.com/amber-store/core/key"
+	"github.com/amber-store/core/packstore"
 )
 
 // buildTree ingests a small directory tree into a fresh packstore and
@@ -757,9 +757,9 @@ package wantsync
 import (
 	"errors"
 
-	"github.com/jobs-build/amber-store-core/fstree"
-	"github.com/jobs-build/amber-store-core/key"
-	"github.com/jobs-build/amber-store-core/packstore"
+	"github.com/amber-store/core/fstree"
+	"github.com/amber-store/core/key"
+	"github.com/amber-store/core/packstore"
 )
 
 // Wants partitions frontier into the keys that must be transferred. A key
@@ -868,9 +868,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/jobs-build/amber-store-core/fstree"
-	"github.com/jobs-build/amber-store-core/key"
-	"github.com/jobs-build/amber-store-core/packstore"
+	"github.com/amber-store/core/fstree"
+	"github.com/amber-store/core/key"
+	"github.com/amber-store/core/packstore"
 	"github.com/jobs-build/amber-store-iroh/protocol"
 )
 
@@ -978,7 +978,7 @@ Expected: FAIL — undefined `Receive`, `Send`.
 
 - [ ] **Step 3: Write the implementation**
 
-Append to `wantsync/wantsync.go` (add imports `fmt`, `io`, `github.com/jobs-build/amber-store-core/amberpack`, `github.com/jobs-build/amber-store-iroh/protocol`):
+Append to `wantsync/wantsync.go` (add imports `fmt`, `io`, `github.com/amber-store/core/amberpack`, `github.com/jobs-build/amber-store-iroh/protocol`):
 
 ```go
 // Receive runs the receiving half of the want loop over rw: rounds of
@@ -1119,12 +1119,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jobs-build/amber-store-core/fstree"
-	"github.com/jobs-build/amber-store-core/ingest"
-	"github.com/jobs-build/amber-store-core/key"
-	"github.com/jobs-build/amber-store-core/packstore"
-	"github.com/jobs-build/amber-store-core/reference"
-	"github.com/jobs-build/amber-store-core/refstore"
+	"github.com/amber-store/core/fstree"
+	"github.com/amber-store/core/ingest"
+	"github.com/amber-store/core/key"
+	"github.com/amber-store/core/packstore"
+	"github.com/amber-store/core/reference"
+	"github.com/amber-store/core/refstore"
 	"github.com/jobs-build/amber-store-iroh/protocol"
 	"github.com/jobs-build/amber-store-iroh/wantsync"
 )
@@ -1386,10 +1386,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jobs-build/amber-store-core/key"
-	"github.com/jobs-build/amber-store-core/packstore"
-	"github.com/jobs-build/amber-store-core/reference"
-	"github.com/jobs-build/amber-store-core/refstore"
+	"github.com/amber-store/core/key"
+	"github.com/amber-store/core/packstore"
+	"github.com/amber-store/core/reference"
+	"github.com/amber-store/core/refstore"
 	"github.com/jobs-build/amber-store-iroh/protocol"
 	"github.com/jobs-build/amber-store-iroh/wantsync"
 )
@@ -1670,8 +1670,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jobs-build/amber-store-core/packstore"
-	"github.com/jobs-build/amber-store-core/refstore"
+	"github.com/amber-store/core/packstore"
+	"github.com/amber-store/core/refstore"
 	"github.com/jobs-build/amber-store-iroh/protocol"
 	"github.com/jobs-build/amber-store-iroh/server"
 	"github.com/tmc/go-iroh/dns"
@@ -1901,7 +1901,7 @@ func newApp() *cli.App {
 
 - [ ] **Step 3: Write `cmd/amber/chunk.go`**
 
-Copy the `chunkConfig` type, its `chunkOpts()` method, and the `chunkFlags(...)` function **verbatim** from `/Users/dragan/fables-for-robots/amber-store-core/cmd/amber-store/main.go` (they are everything in that file below `newApp`; keep their imports: `fmt`, `github.com/jobs-build/amber-store-core/chunkers`, `github.com/jobs-build/amber-store-core/ingest`, `github.com/urfave/cli/v2`) into a new file starting with:
+Copy the `chunkConfig` type, its `chunkOpts()` method, and the `chunkFlags(...)` function **verbatim** from `/Users/dragan/fables-for-robots/amber-store-core/cmd/amber-store/main.go` (they are everything in that file below `newApp`; keep their imports: `fmt`, `github.com/amber-store/core/chunkers`, `github.com/amber-store/core/ingest`, `github.com/urfave/cli/v2`) into a new file starting with:
 
 ```go
 package main
@@ -2225,9 +2225,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jobs-build/amber-store-core/key"
-	"github.com/jobs-build/amber-store-core/reference"
-	"github.com/jobs-build/amber-store-core/refstore"
+	"github.com/amber-store/core/key"
+	"github.com/amber-store/core/reference"
+	"github.com/amber-store/core/refstore"
 	"github.com/jobs-build/amber-store-iroh/protocol"
 	"github.com/jobs-build/amber-store-iroh/wantsync"
 	"github.com/urfave/cli/v2"
@@ -2360,8 +2360,8 @@ package main
 import (
 	"fmt"
 
-	"github.com/jobs-build/amber-store-core/key"
-	"github.com/jobs-build/amber-store-core/reference"
+	"github.com/amber-store/core/key"
+	"github.com/amber-store/core/reference"
 	"github.com/jobs-build/amber-store-iroh/protocol"
 	"github.com/jobs-build/amber-store-iroh/wantsync"
 	"github.com/urfave/cli/v2"
@@ -2460,7 +2460,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/jobs-build/amber-store-core/key"
+	"github.com/amber-store/core/key"
 	"github.com/jobs-build/amber-store-iroh/protocol"
 	"github.com/urfave/cli/v2"
 )
@@ -2577,8 +2577,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jobs-build/amber-store-core/packstore"
-	"github.com/jobs-build/amber-store-core/refstore"
+	"github.com/amber-store/core/packstore"
+	"github.com/amber-store/core/refstore"
 	"github.com/jobs-build/amber-store-iroh/protocol"
 	"github.com/jobs-build/amber-store-iroh/server"
 	"github.com/tmc/go-iroh/iroh"
@@ -2792,7 +2792,7 @@ In `docs/superpowers/specs/2026-07-21-amber-store-iroh-design.md`:
 # Amber-Store Iroh
 
 A peer-to-peer distributed layer over
-[amber-store-core](https://github.com/jobs-build/amber-store-core):
+[amber-store-core](https://github.com/amber-store/core):
 `amber-serve` hosts an amber store reachable over [iroh](https://iroh.computer)
 QUIC; `amber` owns a local store copy, imports directories, and pushes/pulls
 refs (with only the missing objects crossing the wire).

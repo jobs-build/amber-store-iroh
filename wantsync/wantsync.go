@@ -9,10 +9,10 @@ import (
 	"io"
 	"sync"
 
-	"github.com/jobs-build/amber-store-core/amberpack"
-	"github.com/jobs-build/amber-store-core/fstree"
-	"github.com/jobs-build/amber-store-core/key"
-	"github.com/jobs-build/amber-store-core/packstore"
+	"github.com/amber-store/core/amberpack"
+	"github.com/amber-store/core/fstree"
+	"github.com/amber-store/core/key"
+	"github.com/amber-store/core/packstore"
 	"github.com/jobs-build/amber-store-iroh/protocol"
 )
 
@@ -53,7 +53,7 @@ func Wants(st *packstore.Store, frontier []key.Key, jobs int) ([]key.Key, error)
 			wants = append(wants, k)
 			continue
 		}
-		err = fstree.CheckComplete(k, st.Get, st.Has, jobs)
+		_, err = fstree.CheckComplete(k, st.Get, st.Has, jobs)
 		switch {
 		case err == nil: // complete subtree: prune
 		case isMissing(err):

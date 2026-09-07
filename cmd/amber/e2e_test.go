@@ -14,11 +14,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jobs-build/amber-store-core/fstree"
-	"github.com/jobs-build/amber-store-core/ingest"
-	"github.com/jobs-build/amber-store-core/key"
-	"github.com/jobs-build/amber-store-core/packstore"
-	"github.com/jobs-build/amber-store-core/refstore"
+	"github.com/amber-store/core/fstree"
+	"github.com/amber-store/core/ingest"
+	"github.com/amber-store/core/key"
+	"github.com/amber-store/core/packstore"
+	"github.com/amber-store/core/refstore"
 	"github.com/jobs-build/amber-store-iroh/protocol"
 	"github.com/jobs-build/amber-store-iroh/server"
 	"github.com/jobs-build/amber-store-iroh/wantsync"
@@ -486,7 +486,7 @@ func TestRunSendersOldServerFallback(t *testing.T) {
 	if err := <-recvDone; err != nil {
 		t.Fatalf("old-style receiver: %v", err)
 	}
-	if err := fstree.CheckComplete(root, dest.Get, dest.Has, 0); err != nil {
+	if _, err := fstree.CheckComplete(root, dest.Get, dest.Has, 0); err != nil {
 		t.Fatalf("dest incomplete after fallback transfer: %v", err)
 	}
 }

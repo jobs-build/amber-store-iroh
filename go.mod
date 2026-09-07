@@ -1,4 +1,4 @@
-module github.com/jobs-build/amber-store-iroh
+module github.com/amber-store/transport-iroh
 
 go 1.26.5
 

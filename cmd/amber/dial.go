@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jobs-build/amber-store-iroh/protocol"
-	"github.com/jobs-build/amber-store-iroh/relaymode"
+	"github.com/amber-store/transport-iroh/protocol"
+	"github.com/amber-store/transport-iroh/relaymode"
 	"github.com/tmc/go-iroh/iroh"
 	"github.com/tmc/go-iroh/iroh/mdns"
 	irohkey "github.com/tmc/go-iroh/key"

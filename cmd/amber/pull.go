@@ -11,8 +11,8 @@ import (
 
 	"github.com/amber-store/core/key"
 	"github.com/amber-store/core/reference"
-	"github.com/jobs-build/amber-store-iroh/protocol"
-	"github.com/jobs-build/amber-store-iroh/wantsync"
+	"github.com/amber-store/transport-iroh/protocol"
+	"github.com/amber-store/transport-iroh/wantsync"
 	"github.com/urfave/cli/v2"
 )
 

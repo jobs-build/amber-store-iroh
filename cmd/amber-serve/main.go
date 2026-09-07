@@ -19,9 +19,9 @@ import (
 
 	"github.com/amber-store/core/packstore"
 	"github.com/amber-store/core/refstore"
-	"github.com/jobs-build/amber-store-iroh/protocol"
-	"github.com/jobs-build/amber-store-iroh/relaymode"
-	"github.com/jobs-build/amber-store-iroh/server"
+	"github.com/amber-store/transport-iroh/protocol"
+	"github.com/amber-store/transport-iroh/relaymode"
+	"github.com/amber-store/transport-iroh/server"
 	"github.com/tmc/go-iroh/dns"
 	"github.com/tmc/go-iroh/iroh"
 	"github.com/tmc/go-iroh/iroh/mdns"

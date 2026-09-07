@@ -11,7 +11,7 @@ import (
 	"github.com/amber-store/core/fstree"
 	"github.com/amber-store/core/key"
 	"github.com/amber-store/core/packstore"
-	"github.com/jobs-build/amber-store-iroh/protocol"
+	"github.com/amber-store/transport-iroh/protocol"
 )
 
 // duplex joins one side's reader with its writer.

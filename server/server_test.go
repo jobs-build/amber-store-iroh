@@ -497,3 +497,10 @@ func TestAttachUnknownToken(t *testing.T) {
 		t.Fatalf("want bad-request for unknown token, got %+v", m)
 	}
 }
+
+func TestAttachWaitDefaultCoversPunching(t *testing.T) {
+	s := New(slog.New(slog.NewTextHandler(io.Discard, nil)), nil, nil)
+	if s.attachWait != 10*time.Second {
+		t.Fatalf("attachWait %v, want 10s (punching attaches ride the relay first)", s.attachWait)
+	}
+}

@@ -5,7 +5,7 @@ go 1.26.5
 require (
 	github.com/amber-store/core v0.0.4
 	github.com/fxamacker/cbor/v2 v2.9.2
-	github.com/tmc/go-iroh v0.0.0-20260714221401-b17af420bb03
+	github.com/tmc/go-iroh v0.1.0
 	github.com/urfave/cli/v2 v2.27.7
 	golang.org/x/sys v0.46.0
 )

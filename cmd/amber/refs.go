@@ -53,9 +53,7 @@ func runRefs(c *cli.Context, server string, addrs []string, relayURL string) err
 	default:
 		return fmt.Errorf("%w: type %d, want TRefs", protocol.ErrProtocol, m.Type)
 	}
-	if err := stream.Close(); err != nil {
-		return err
-	}
+	closeStream(stream)
 	for _, r := range m.Refs {
 		k, err := key.Parse(r.Key)
 		if err != nil {

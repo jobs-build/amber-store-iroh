@@ -350,3 +350,17 @@ func raceConnect(ctx context.Context, ep *iroh.Endpoint, id irohkey.EndpointID, 
 	}
 	return nil, errors.Join(errs...)
 }
+
+// closeStream ends a one-request stream once the final frame has been
+// read. Close is best effort: the server retires its side with
+// STOP_SENDING as soon as it has answered, and closing a stream the peer
+// already canceled reports an error that carries no information.
+// CancelRead then completes the receive half so the stream fully retires
+// and its MAX_STREAMS credit comes back — without it every operation on a
+// reused connection leaks one stream until the 101st open blocks.
+func closeStream(stream io.Closer) {
+	_ = stream.Close()
+	if cr, ok := stream.(interface{ CancelRead(code uint64) }); ok {
+		cr.CancelRead(0)
+	}
+}

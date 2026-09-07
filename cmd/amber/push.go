@@ -139,9 +139,7 @@ func runPush(c *cli.Context, server string, addrs []string, relayURL string, for
 	default:
 		return fmt.Errorf("%w: type %d, want TOK", protocol.ErrProtocol, m.Type)
 	}
-	if err := stream.Close(); err != nil {
-		return err
-	}
+	closeStream(stream)
 
 	// Record the new server-side value for the next push's CAS check.
 	trec := reference.Reference{Name: tname, Key: root[:], CreatedAt: time.Now().UnixNano()}

@@ -121,9 +121,7 @@ func runPull(c *cli.Context, server string, addrs []string, relayURL string, noP
 		return err
 	}
 	xfer.Finish()
-	if err := stream.Close(); err != nil {
-		return err
-	}
+	closeStream(stream)
 
 	// Store the server's record verbatim under both the local name and
 	// the tracking name: verbatim keeps opaque signature fields intact,

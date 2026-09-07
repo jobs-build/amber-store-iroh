@@ -33,7 +33,8 @@ type Server struct {
 
 	// attachWait bounds how long a sharded transfer waits for the
 	// client's promised data connections before proceeding with
-	// whatever attached.
+	// whatever attached. 10s covers a punching attach — relay connect
+	// then TAttach — while gather's early exit keeps fast attaches free.
 	attachWait time.Duration
 	transfers  transfers
 	// dataPorts are the UDP ports of the extra data endpoints, offered
@@ -41,9 +42,28 @@ type Server struct {
 	// sockets (one endpoint's socket loop caps out well below a fast
 	// link).
 	dataPorts []uint16
+	// dataEndpoints, when set, snapshots the data endpoints' identities and
+	// live dial candidates for TAccept/TRef — a closure because relay and
+	// QAD candidates appear asynchronously after bind.
+	dataEndpoints func() []protocol.DataEndpointRec
+
+	// onAccess, when set, is called with every ref name a pull resolved or
+	// a push committed — the GC access-tracking seam. onPin is called for
+	// every existing name in a TPin assert. guard, when set, brackets the
+	// push path's reference write with the collector's PrepareRef. All
+	// three are set before Serve, like SetDataPorts.
+	onAccess func(name string)
+	onPin    func(name string)
+	guard    RefGuard
 
 	mu       sync.Mutex
 	refLocks map[string]*sync.Mutex
+}
+
+// RefGuard is the GC write barrier around reference publication.
+// *gc.Collector from amber-store-core satisfies it directly.
+type RefGuard interface {
+	PrepareRef(root key.Key) (commit, abort func(), err error)
 }
 
 // maxDataConns caps the extra data connections one transfer may request.
@@ -112,6 +132,20 @@ func (t *transfers) gather(token []byte, n int, wait time.Duration) []io.ReadWri
 	return out
 }
 
+// closeStream fully terminates a server-side stream: Close finishes the
+// send side (FIN), CancelRead sends STOP_SENDING so the client→server half
+// completes without the handler reading to EOF. Without the cancel the
+// stream never retires and its MAX_STREAMS credit is never returned — a
+// sharding client that reuses one connection for many transfers runs dry
+// at exactly the initial stream budget (observed in the field as
+// OpenStreamSync hanging after precisely 100 attaches).
+func closeStream(rw io.Closer) {
+	_ = rw.Close()
+	if cr, ok := rw.(interface{ CancelRead(code uint64) }); ok {
+		cr.CancelRead(0)
+	}
+}
+
 // drop unregisters the token; streams attached but never gathered are
 // closed.
 func (t *transfers) drop(token []byte) {
@@ -125,7 +159,7 @@ func (t *transfers) drop(token []byte) {
 	for {
 		select {
 		case rw := <-ch:
-			rw.Close()
+			closeStream(rw)
 		default:
 			return
 		}
@@ -135,12 +169,25 @@ func (t *transfers) drop(token []byte) {
 // New wires a Server over an open packstore and refstore. The caller keeps
 // ownership of both and closes them after the server stops.
 func New(log *slog.Logger, objects *packstore.Store, refs *refstore.Store) *Server {
-	return &Server{log: log, objects: objects, refs: refs, attachWait: 5 * time.Second, refLocks: map[string]*sync.Mutex{}}
+	return &Server{log: log, objects: objects, refs: refs, attachWait: 10 * time.Second, refLocks: map[string]*sync.Mutex{}}
 }
 
 // SetDataPorts records the data-endpoint ports advertised to sharding
 // clients. Call before Serve.
 func (s *Server) SetDataPorts(ports []uint16) { s.dataPorts = ports }
+
+// SetDataEndpoints installs the data-endpoint snapshot advertised to
+// sharding clients; call before Serve, like SetDataPorts.
+func (s *Server) SetDataEndpoints(f func() []protocol.DataEndpointRec) { s.dataEndpoints = f }
+
+// SetOnAccess installs the ref-access hook. Call before Serve.
+func (s *Server) SetOnAccess(f func(name string)) { s.onAccess = f }
+
+// SetOnPin installs the pin-assert hook. Call before Serve.
+func (s *Server) SetOnPin(f func(name string)) { s.onPin = f }
+
+// SetRefGuard installs the reference write barrier. Call before Serve.
+func (s *Server) SetRefGuard(g RefGuard) { s.guard = g }
 
 // lockRef serializes ref commits per name so compare-and-swap is
 // race-free under concurrent pushes. Entries are never removed; the map
@@ -164,7 +211,7 @@ func (s *Server) lockRef(name string) (unlock func()) {
 func (s *Server) HandleStream(remote string, rw io.ReadWriteCloser) {
 	m, err := protocol.ReadMsg(rw)
 	if err != nil {
-		rw.Close()
+		closeStream(rw)
 		s.log.Error("read request", "error", err)
 		return
 	}
@@ -176,11 +223,11 @@ func (s *Server) HandleStream(remote string, rw io.ReadWriteCloser) {
 			return
 		}
 		_ = protocol.WriteMsg(rw, protocol.Msg{Type: protocol.TErr, Code: protocol.CodeBadRequest, Text: "unknown transfer token"})
-		rw.Close()
+		closeStream(rw)
 		s.log.Warn("attach with unknown token", "remote", remote)
 		return
 	}
-	defer rw.Close()
+	defer closeStream(rw)
 	switch m.Type {
 	case protocol.TRefList:
 		err = s.handleRefList(rw)
@@ -188,6 +235,8 @@ func (s *Server) HandleStream(remote string, rw io.ReadWriteCloser) {
 		err = s.handlePush(remote, rw, m)
 	case protocol.TPull:
 		err = s.handlePull(rw, m)
+	case protocol.TPin:
+		err = s.handlePin(rw, m)
 	default:
 		err = s.fail(rw, protocol.CodeBadRequest, fmt.Errorf("unknown operation %d", m.Type))
 	}
@@ -229,6 +278,25 @@ func (s *Server) handleRefList(rw io.ReadWriter) error {
 	return protocol.WriteMsg(rw, protocol.Msg{Type: protocol.TRefs, Refs: infos})
 }
 
+// handlePin marks the named refs kept-forever. Nonexistent names are
+// ignored, not an error — a registry may assert ahead of a re-resolve. Any
+// other refs.Get error (a real store problem, not a missing name) fails the
+// whole request instead of being silently swallowed.
+func (s *Server) handlePin(rw io.ReadWriter, m protocol.Msg) error {
+	for _, name := range m.Names {
+		if _, err := s.refs.Get(name); err != nil {
+			if errors.Is(err, refstore.ErrNotFound) {
+				continue
+			}
+			return s.fail(rw, protocol.CodeInternal, err)
+		}
+		if s.onPin != nil {
+			s.onPin(name)
+		}
+	}
+	return protocol.WriteMsg(rw, protocol.Msg{Type: protocol.TOK})
+}
+
 func (s *Server) handlePush(remote string, rw io.ReadWriter, m protocol.Msg) error {
 	start := time.Now()
 	if err := reference.ValidateName(m.Name); err != nil {
@@ -266,8 +334,21 @@ func (s *Server) handlePush(remote string, rw io.ReadWriter, m protocol.Msg) err
 	if err != nil {
 		return s.fail(rw, protocol.CodeInternal, err)
 	}
-	if err := s.refs.Put(m.Name, raw); err != nil {
+	if s.guard != nil {
+		commit, abort, gerr := s.guard.PrepareRef(root)
+		if gerr != nil {
+			return s.fail(rw, protocol.CodeInternal, fmt.Errorf("gc guard: %w", gerr))
+		}
+		if err := s.refs.Put(m.Name, raw); err != nil {
+			abort()
+			return s.fail(rw, protocol.CodeInternal, err)
+		}
+		commit()
+	} else if err := s.refs.Put(m.Name, raw); err != nil {
 		return s.fail(rw, protocol.CodeInternal, err)
+	}
+	if s.onAccess != nil {
+		s.onAccess(m.Name)
 	}
 	if err := protocol.WriteMsg(rw, protocol.Msg{Type: protocol.TOK, Key: root[:]}); err != nil {
 		return err
@@ -317,7 +398,11 @@ func (s *Server) shardChannels(rw io.ReadWriter, dataConns int) ([]io.ReadWriter
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := protocol.WriteMsg(rw, protocol.Msg{Type: protocol.TAccept, Token: token, DataPorts: s.dataPorts}); err != nil {
+	accept := protocol.Msg{Type: protocol.TAccept, Token: token, DataPorts: s.dataPorts}
+	if s.dataEndpoints != nil {
+		accept.DataEndpoints = s.dataEndpoints()
+	}
+	if err := protocol.WriteMsg(rw, accept); err != nil {
 		s.transfers.drop(token)
 		return nil, nil, err
 	}
@@ -330,7 +415,7 @@ func (s *Server) shardChannels(rw io.ReadWriter, dataConns int) ([]io.ReadWriter
 	release := func() {
 		s.transfers.drop(token)
 		for _, e := range extras {
-			e.Close()
+			closeStream(e)
 		}
 	}
 	return channels, release, nil
@@ -375,6 +460,9 @@ func (s *Server) handlePull(rw io.ReadWriter, m protocol.Msg) error {
 	if err != nil {
 		return s.fail(rw, protocol.CodeInternal, err)
 	}
+	if s.onAccess != nil {
+		s.onAccess(m.Name)
+	}
 	ref := protocol.Msg{Type: protocol.TRef, Record: raw}
 	var token []byte
 	if m.DataConns > 0 {
@@ -384,6 +472,9 @@ func (s *Server) handlePull(rw io.ReadWriter, m protocol.Msg) error {
 		}
 		ref.Token = token
 		ref.DataPorts = s.dataPorts
+		if s.dataEndpoints != nil {
+			ref.DataEndpoints = s.dataEndpoints()
+		}
 	}
 	if err := protocol.WriteMsg(rw, ref); err != nil {
 		if token != nil {
@@ -398,7 +489,7 @@ func (s *Server) handlePull(rw io.ReadWriter, m protocol.Msg) error {
 		defer func() {
 			s.transfers.drop(token)
 			for _, e := range extras {
-				e.Close()
+				closeStream(e)
 			}
 		}()
 		for _, e := range extras {

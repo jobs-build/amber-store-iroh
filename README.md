@@ -67,6 +67,8 @@ The wire protocol (CBOR frames, have/want rounds, chunked amberpack
 payloads) is specified in
 [`docs/superpowers/specs/2026-07-21-amber-store-iroh-design.md`](docs/superpowers/specs/2026-07-21-amber-store-iroh-design.md).
 
-- Module: `github.com/amber-store/transport-iroh` (fetching the
-  private core module needs `GOPRIVATE=github.com/jobs-build/*`).
+- Module: `github.com/amber-store/transport-iroh`. Library consumers can
+  import the single facade package `amberiroh`, which re-exports
+  `protocol`, `wantsync`, `server` and `relaymode`; the CLIs use the
+  four packages directly.
 - Go: 1.26+

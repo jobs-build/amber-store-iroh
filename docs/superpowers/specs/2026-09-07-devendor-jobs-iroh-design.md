@@ -92,7 +92,7 @@ Port the vendored changes into the existing packages, by diff against
   lower index, single-channel fast path.
 - `Receive` samples each channel's wire bytes per round (`crs[i].n` deltas)
   and deals the next round with `dealWants` instead of `shardWants`.
-  `shardWants` is removed if nothing else uses it.
+  `shardWants` stays: `loop_test.go` still exercises it directly.
 
 Tests, all internal (`package protocol` etc.), copied from the vendored
 files:
@@ -159,7 +159,7 @@ One PR on branch `devendor-amberiroh`.
 
 - `git rm -r amberiroh/`.
 - `go get github.com/amber-store/transport-iroh@v0.2.0`, `go mod tidy`.
-- In the ten importing files, replace
+- In the 13 importing files (amberclient, registryd, runnerd, serve), replace
   `"github.com/jobs-build/jobs-iroh/amberiroh"` with
   `"github.com/amber-store/transport-iroh/amberiroh"`. The `amberiroh.`
   qualifiers stay. gofmt afterwards; the new path sorts differently.

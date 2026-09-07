@@ -17,8 +17,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jobs-build/amber-store-core/packstore"
-	"github.com/jobs-build/amber-store-core/refstore"
+	"github.com/amber-store/core/packstore"
+	"github.com/amber-store/core/refstore"
 	"github.com/jobs-build/amber-store-iroh/protocol"
 	"github.com/jobs-build/amber-store-iroh/relaymode"
 	"github.com/jobs-build/amber-store-iroh/server"

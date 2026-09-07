@@ -1,7 +1,7 @@
 # Amber-Store Iroh
 
 A peer-to-peer distributed layer over
-[amber-store-core](https://github.com/jobs-build/amber-store-core):
+[amber-store-core](https://github.com/amber-store/core):
 `amber-serve` hosts an amber store reachable over [iroh](https://iroh.computer)
 QUIC; `amber` owns a local store copy, imports directories, and pushes/pulls
 refs (with only the missing objects crossing the wire).

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/jobs-build/amber-store-core/packstore"
-	"github.com/jobs-build/amber-store-core/refstore"
+	"github.com/amber-store/core/packstore"
+	"github.com/amber-store/core/refstore"
 	"github.com/urfave/cli/v2"
 )
 

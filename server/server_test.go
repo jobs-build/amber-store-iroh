@@ -14,12 +14,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jobs-build/amber-store-core/fstree"
-	"github.com/jobs-build/amber-store-core/ingest"
-	"github.com/jobs-build/amber-store-core/key"
-	"github.com/jobs-build/amber-store-core/packstore"
-	"github.com/jobs-build/amber-store-core/reference"
-	"github.com/jobs-build/amber-store-core/refstore"
+	"github.com/amber-store/core/fstree"
+	"github.com/amber-store/core/ingest"
+	"github.com/amber-store/core/key"
+	"github.com/amber-store/core/packstore"
+	"github.com/amber-store/core/reference"
+	"github.com/amber-store/core/refstore"
 	"github.com/jobs-build/amber-store-iroh/protocol"
 	"github.com/jobs-build/amber-store-iroh/wantsync"
 )
@@ -97,7 +97,7 @@ func TestPushCreatesRefAndTransfersObjects(t *testing.T) {
 	if m.Type != protocol.TOK {
 		t.Fatalf("want TOK, got %+v", m)
 	}
-	if err := fstree.CheckComplete(root, srv.objects.Get, srv.objects.Has, 0); err != nil {
+	if _, err := fstree.CheckComplete(root, srv.objects.Get, srv.objects.Has, 0); err != nil {
 		t.Fatalf("server store incomplete: %v", err)
 	}
 	raw, err := srv.refs.Get("backups/home")
@@ -299,7 +299,7 @@ func TestPullTransfersTree(t *testing.T) {
 	if _, err := wantsync.Receive([]io.ReadWriter{c}, dest, k, 0, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := fstree.CheckComplete(k, dest.Get, dest.Has, 0); err != nil {
+	if _, err := fstree.CheckComplete(k, dest.Get, dest.Has, 0); err != nil {
 		t.Fatalf("pulled tree incomplete: %v", err)
 	}
 }
@@ -456,7 +456,7 @@ func TestPushShardedOverPipes(t *testing.T) {
 	if m.Type != protocol.TOK {
 		t.Fatalf("want TOK, got %+v", m)
 	}
-	if err := fstree.CheckComplete(root, srv.objects.Get, srv.objects.Has, 0); err != nil {
+	if _, err := fstree.CheckComplete(root, srv.objects.Get, srv.objects.Has, 0); err != nil {
 		t.Fatalf("server store incomplete after sharded push: %v", err)
 	}
 }
@@ -475,7 +475,7 @@ func TestPushShardedLenientGather(t *testing.T) {
 	if m.Type != protocol.TOK {
 		t.Fatalf("want TOK, got %+v", m)
 	}
-	if err := fstree.CheckComplete(root, srv.objects.Get, srv.objects.Has, 0); err != nil {
+	if _, err := fstree.CheckComplete(root, srv.objects.Get, srv.objects.Has, 0); err != nil {
 		t.Fatalf("server store incomplete: %v", err)
 	}
 }

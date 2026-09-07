@@ -452,6 +452,41 @@ Claude-Session: https://claude.ai/code/session_01GAJmL5jzzyWvFiikdwFCEn"
 
 ---
 
+### Task 3b (added during execution): amber CLI tolerates the server's STOP_SENDING
+
+**Why:** after Task 3 the server retires each request stream with `CancelRead` as soon as it has answered. The `amber` CLI's push, pull and refs commands did `if err := stream.Close(); err != nil { return err }` after reading the final frame, and go-iroh reports `close called for canceled stream N` when the peer has already canceled the send side — so all four `cmd/amber` e2e tests failed. jobs-iroh's `amberclient.CloseStream` has handled exactly this since July.
+
+**Files:**
+- Modify: `$T/cmd/amber/dial.go` (new helper), `$T/cmd/amber/push.go:142`, `$T/cmd/amber/pull.go:124`, `$T/cmd/amber/refs.go:56`
+
+- [x] **Step 1: Failing tests** — `go test ./cmd/amber/` fails `TestE2EPushPullRestoreRoundTrip`, `TestE2ECASConflictAndForce`, `TestE2EInterruptedPushResume`, `TestE2ESingleConn` with `close called for canceled stream 0`.
+
+- [x] **Step 2: Implement** — append to `cmd/amber/dial.go`:
+
+```go
+// closeStream ends a one-request stream once the final frame has been
+// read. Close is best effort: the server retires its side with
+// STOP_SENDING as soon as it has answered, and closing a stream the peer
+// already canceled reports an error that carries no information.
+// CancelRead then completes the receive half so the stream fully retires
+// and its MAX_STREAMS credit comes back — without it every operation on a
+// reused connection leaks one stream until the 101st open blocks.
+func closeStream(stream io.Closer) {
+	_ = stream.Close()
+	if cr, ok := stream.(interface{ CancelRead(code uint64) }); ok {
+		cr.CancelRead(0)
+	}
+}
+```
+
+and replace the three `if err := stream.Close(); err != nil { return err }` blocks with `closeStream(stream)`.
+
+- [x] **Step 3: Verify** — `go test ./cmd/amber/` and the full suite pass.
+
+- [x] **Step 4: Commit** — `amber: best-effort stream close after the final frame`.
+
+---
+
 ### Task 4: server — advertise data endpoints on TAccept and TRef
 
 **Files:**

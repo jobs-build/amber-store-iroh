@@ -3,7 +3,7 @@ module github.com/amber-store/transport-iroh
 go 1.26.5
 
 require (
-	github.com/amber-store/core v0.0.4
+	github.com/amber-store/core v0.0.7
 	github.com/fxamacker/cbor/v2 v2.9.2
 	github.com/tmc/go-iroh v0.2.0
 	github.com/urfave/cli/v2 v2.27.7
